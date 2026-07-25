@@ -1,0 +1,21 @@
+# dependencies
+/node_modules
+
+# next
+/.next
+/out
+/.open-next
+/.wrangler
+
+# local secrets
+.env
+.env.local
+.env.*.local
+
+# misc
+.DS_Store
+*.pem
+*.tsbuildinfo
+dev.log
+dev-error.log
+npm-debug.log*
