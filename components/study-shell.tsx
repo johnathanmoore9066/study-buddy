@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import {
   FormEvent,
+  Fragment,
   KeyboardEvent,
   useCallback,
   useEffect,
@@ -10,13 +11,21 @@ import {
   useRef,
   useState,
 } from "react";
-import { DOMAIN_COLORS, STARTER_EDGES, STARTER_NODES, positionForConcept } from "@/lib/concepts";
+import {
+  DOMAIN_COLORS,
+  STARTER_EDGES,
+  STARTER_NODES,
+  positionForConcept,
+} from "@/lib/concepts";
+import { PROVIDERS, providerName } from "@/lib/providers";
 import { DEPTH_LABELS } from "@/lib/system-prompt";
 import type {
   ChatMessage,
   ConceptEdge,
   ConceptNode,
   DepthLevel,
+  ProviderConfig,
+  ProviderId,
   TutorResponse,
 } from "@/lib/types";
 import { Icon } from "@/components/icons";
@@ -36,6 +45,15 @@ const SkillUniverse = dynamic(
 );
 
 const STORAGE_KEY = "aster-session-v1";
+const PROVIDER_STORAGE_KEY = "aster-provider-v1";
+const SESSION_KEY = "aster-session-api-key";
+
+const DEFAULT_PROVIDER: ProviderConfig = {
+  id: "deepseek",
+  model: "deepseek-v4-pro",
+  apiKey: "",
+  remember: true,
+};
 
 const STARTER_MESSAGES: ChatMessage[] = [
   {
@@ -98,11 +116,14 @@ export function StudyShell() {
   const [assignmentContext, setAssignmentContext] = useState("");
   const [contextDraft, setContextDraft] = useState("");
   const [contextOpen, setContextOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [provider, setProvider] =
+    useState<ProviderConfig>(DEFAULT_PROVIDER);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [mobilePane, setMobilePane] = useState<"chat" | "universe">("chat");
   const [hydrated, setHydrated] = useState(false);
-  const [milestone, setMilestone] = useState<TutorResponse["milestone"]>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -118,17 +139,20 @@ export function StudyShell() {
           selectedId?: string;
           depth?: DepthLevel;
           assignmentContext?: string;
+          quickReplies?: string[];
         };
         if (Array.isArray(parsed.messages) && parsed.messages.length) {
           setMessages(parsed.messages);
         }
-        if (Array.isArray(parsed.nodes) && parsed.nodes.length) {
+        if (Array.isArray(parsed.nodes)) {
           setNodes(parsed.nodes);
         }
-        if (Array.isArray(parsed.edges) && parsed.edges.length) {
+        if (Array.isArray(parsed.edges)) {
           setEdges(parsed.edges);
         }
-        if (parsed.selectedId) setSelectedId(parsed.selectedId);
+        if (typeof parsed.selectedId === "string") {
+          setSelectedId(parsed.selectedId);
+        }
         if ([1, 2, 3, 4, 5].includes(Number(parsed.depth))) {
           setDepth(parsed.depth as DepthLevel);
         }
@@ -136,6 +160,33 @@ export function StudyShell() {
           setAssignmentContext(parsed.assignmentContext);
           setContextDraft(parsed.assignmentContext);
         }
+        if (Array.isArray(parsed.quickReplies)) {
+          setQuickReplies(
+            parsed.quickReplies.filter(
+              (reply): reply is string => typeof reply === "string",
+            ),
+          );
+        }
+      }
+      const savedProvider = localStorage.getItem(PROVIDER_STORAGE_KEY);
+      if (savedProvider) {
+        const parsed = JSON.parse(savedProvider) as Partial<ProviderConfig>;
+        const apiKey =
+          parsed.remember === false
+            ? sessionStorage.getItem(SESSION_KEY) ?? ""
+            : typeof parsed.apiKey === "string"
+              ? parsed.apiKey
+              : "";
+        setProvider({
+          id: parsed.id ?? DEFAULT_PROVIDER.id,
+          model: parsed.model ?? DEFAULT_PROVIDER.model,
+          baseUrl: parsed.baseUrl ?? "",
+          remember: parsed.remember ?? true,
+          apiKey,
+        });
+        if (!apiKey) setSettingsOpen(true);
+      } else {
+        setSettingsOpen(true);
       }
     } catch {
       localStorage.removeItem(STORAGE_KEY);
@@ -143,6 +194,25 @@ export function StudyShell() {
       setHydrated(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const saved = {
+      id: provider.id,
+      model: provider.model,
+      baseUrl: provider.baseUrl,
+      remember: provider.remember,
+      apiKey: provider.remember ? provider.apiKey : "",
+    };
+    localStorage.setItem(PROVIDER_STORAGE_KEY, JSON.stringify(saved));
+    if (provider.remember) {
+      sessionStorage.removeItem(SESSION_KEY);
+    } else if (provider.apiKey) {
+      sessionStorage.setItem(SESSION_KEY, provider.apiKey);
+    } else {
+      sessionStorage.removeItem(SESSION_KEY);
+    }
+  }, [hydrated, provider]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -155,6 +225,7 @@ export function StudyShell() {
         selectedId,
         depth,
         assignmentContext,
+        quickReplies,
       }),
     );
   }, [
@@ -164,6 +235,7 @@ export function StudyShell() {
     hydrated,
     messages,
     nodes,
+    quickReplies,
     selectedId,
   ]);
 
@@ -187,8 +259,7 @@ export function StudyShell() {
   const selectedNode = useMemo(
     () =>
       nodes.find((node) => node.id === selectedId) ??
-      focusNode ??
-      STARTER_NODES[0],
+      focusNode,
     [focusNode, nodes, selectedId],
   );
 
@@ -199,12 +270,14 @@ export function StudyShell() {
 
   const prerequisites = useMemo(
     () =>
-      edges
+      selectedNode
+        ? edges
         .filter((edge) => edge.to === selectedNode.id)
         .map((edge) => nodes.find((node) => node.id === edge.from))
         .filter((node): node is ConceptNode => Boolean(node))
-        .slice(0, 3),
-    [edges, nodes, selectedNode.id],
+            .slice(0, 3)
+        : [],
+    [edges, nodes, selectedNode],
   );
 
   const graphSummary = useMemo(
@@ -321,7 +394,6 @@ export function StudyShell() {
 
     setSelectedId(focus.id);
     setQuickReplies(response.quickReplies);
-    setMilestone(response.milestone);
   }, []);
 
   const requestTutor = useCallback(
@@ -338,6 +410,7 @@ export function StudyShell() {
             currentConcept: focusNode?.label ?? "",
             assignmentContext,
             graphSummary,
+            provider,
           }),
         });
 
@@ -355,6 +428,7 @@ export function StudyShell() {
             role: "assistant",
             content: result.reply,
             timestamp: timeLabel(),
+            milestone: result.milestone,
           },
         ]);
         mergeTutorState(result);
@@ -374,6 +448,7 @@ export function StudyShell() {
       focusNode?.label,
       graphSummary,
       mergeTutorState,
+      provider,
     ],
   );
 
@@ -381,6 +456,10 @@ export function StudyShell() {
     async (rawMessage: string) => {
       const content = rawMessage.trim();
       if (!content || pending) return;
+      if (!provider.apiKey.trim()) {
+        setSettingsOpen(true);
+        return;
+      }
       const userMessage: ChatMessage = {
         id: newId("user"),
         role: "user",
@@ -391,10 +470,9 @@ export function StudyShell() {
       setMessages(conversation);
       setInput("");
       setQuickReplies([]);
-      setMilestone(null);
       await requestTutor(conversation);
     },
-    [messages, pending, requestTutor],
+    [messages, pending, provider.apiKey, requestTutor],
   );
 
   const handleSubmit = (event: FormEvent) => {
@@ -430,32 +508,45 @@ export function StudyShell() {
     setContextOpen(false);
   };
 
-  const startNewSession = () => {
-    const shouldReset = window.confirm(
-      "Start a fresh conversation? Your learning universe will stay with you.",
-    );
-    if (!shouldReset) return;
+  const resetLearning = () => {
     const welcome: ChatMessage = {
       id: newId("assistant"),
       role: "assistant",
       content:
-        "What are we untangling today? Drop in the topic, problem, or your messiest first thought. I’ll help you find the next step without taking the thinking away from you.",
+        "Blank slate, open sky. What are we untangling today? Drop in the topic, problem, or your messiest first thought—I’ll help you find the next step without taking the thinking away from you.",
       timestamp: timeLabel(),
     };
     setMessages([welcome]);
-    setQuickReplies([
+    setNodes([]);
+    setEdges([]);
+    setSelectedId("");
+    const blankSlateReplies = [
       "I have a homework problem.",
       "Teach me a concept from scratch.",
       "Help me prepare for an exam.",
-    ]);
+    ];
+    setQuickReplies(blankSlateReplies);
     setAssignmentContext("");
     setContextDraft("");
-    setMilestone(null);
     setError("");
     setMobilePane("chat");
+    setResetOpen(false);
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        messages: [welcome],
+        nodes: [],
+        edges: [],
+        selectedId: "",
+        depth,
+        assignmentContext: "",
+        quickReplies: blankSlateReplies,
+      }),
+    );
   };
 
   const studySelected = () => {
+    if (!selectedNode) return;
     setMobilePane("chat");
     const readiness =
       selectedNode.status === "locked"
@@ -472,6 +563,37 @@ export function StudyShell() {
   const selectConcept = useCallback((id: string) => {
     setSelectedId(id);
   }, []);
+
+  const selectProvider = (id: ProviderId) => {
+    const preset = PROVIDERS.find((item) => item.id === id);
+    if (!preset) return;
+    setProvider((current) => ({
+      ...current,
+      id,
+      model: preset.model,
+      baseUrl: id === "custom" ? current.baseUrl : "",
+    }));
+  };
+
+  const saveProvider = () => {
+    if (!provider.apiKey.trim() || !provider.model.trim()) return;
+    if (provider.id === "custom" && !provider.baseUrl?.trim()) return;
+    setProvider((current) => ({
+      ...current,
+      apiKey: current.apiKey.trim(),
+      model: current.model.trim(),
+      baseUrl: current.baseUrl?.trim(),
+    }));
+    setSettingsOpen(false);
+    setError("");
+  };
+
+  const forgetProvider = () => {
+    localStorage.removeItem(PROVIDER_STORAGE_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+    setProvider(DEFAULT_PROVIDER);
+    setSettingsOpen(true);
+  };
 
   return (
     <main className="app-shell">
@@ -521,11 +643,11 @@ export function StudyShell() {
           <button
             className="rail-button rail-new"
             type="button"
-            onClick={startNewSession}
-            aria-label="Start a new session"
+            onClick={() => setResetOpen(true)}
+            aria-label="Reset learning"
           >
-            <Icon name="plus" />
-            <span className="rail-tooltip">New session</span>
+            <Icon name="rotate" />
+            <span className="rail-tooltip">Reset learning</span>
           </button>
           <div className="profile-orb" aria-label="Local learner profile">
             <Icon name="brain" size={15} />
@@ -547,6 +669,19 @@ export function StudyShell() {
           </div>
 
           <div className="topbar-actions">
+            <button
+              className="model-button"
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Model and API settings"
+            >
+              <i className={provider.apiKey ? "is-connected" : ""} />
+              <span>
+                <small>{providerName(provider.id)}</small>
+                {provider.model || "Connect model"}
+              </span>
+              <Icon name="chevron-down" size={14} />
+            </button>
             <button
               className="context-button"
               type="button"
@@ -582,11 +717,11 @@ export function StudyShell() {
             <button
               className="new-session-button"
               type="button"
-              onClick={startNewSession}
-              aria-label="Start a new session"
+              onClick={() => setResetOpen(true)}
+              aria-label="Reset learning"
             >
-              <Icon name="plus" size={16} />
-              <span>New session</span>
+              <Icon name="rotate" size={16} />
+              <span>Reset</span>
             </button>
           </div>
         </header>
@@ -620,7 +755,7 @@ export function StudyShell() {
             <div className="conversation-meta">
               <div>
                 <span className="eyebrow">Working concept</span>
-                <h2>{focusNode?.label}</h2>
+                <h2>{focusNode?.label ?? "Waiting for your topic"}</h2>
               </div>
               <div className="understanding-readout">
                 <span>{focusNode?.mastery ?? 0}%</span>
@@ -630,7 +765,7 @@ export function StudyShell() {
             <div
               className="learning-progress"
               role="progressbar"
-              aria-label={`Understanding evidence for ${focusNode?.label}`}
+              aria-label={`Understanding evidence for ${focusNode?.label ?? "new topic"}`}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={focusNode?.mastery ?? 0}
@@ -646,25 +781,40 @@ export function StudyShell() {
               </div>
 
               {messages.map((message) => (
-                <article
-                  className={`message message--${message.role}`}
-                  key={message.id}
-                >
-                  {message.role === "assistant" && (
-                    <div className="assistant-avatar" aria-hidden="true">
-                      <Icon name="sparkles" size={15} />
+                <Fragment key={message.id}>
+                  <article
+                    className={`message message--${message.role}`}
+                  >
+                    {message.role === "assistant" && (
+                      <div className="assistant-avatar" aria-hidden="true">
+                        <Icon name="sparkles" size={15} />
+                      </div>
+                    )}
+                    <div className="message-body">
+                      <div className="message-author">
+                        <span>
+                          {message.role === "assistant" ? "Aster" : "You"}
+                        </span>
+                        {message.timestamp && <time>{message.timestamp}</time>}
+                      </div>
+                      <div className="message-content">{message.content}</div>
                     </div>
+                  </article>
+
+                  {message.milestone && (
+                    <aside className="milestone-card">
+                      <div className="milestone-icon">
+                        <Icon name="sparkles" size={18} />
+                      </div>
+                      <div>
+                        <span>Insight captured in your words</span>
+                        <blockquote>{message.milestone.title}</blockquote>
+                        <p>{message.milestone.summary}</p>
+                        <small>Saved with this learning trail</small>
+                      </div>
+                    </aside>
                   )}
-                  <div className="message-body">
-                    <div className="message-author">
-                      <span>
-                        {message.role === "assistant" ? "Aster" : "You"}
-                      </span>
-                      {message.timestamp && <time>{message.timestamp}</time>}
-                    </div>
-                    <div className="message-content">{message.content}</div>
-                  </div>
-                </article>
+                </Fragment>
               ))}
 
               {pending && (
@@ -684,19 +834,6 @@ export function StudyShell() {
                     </div>
                   </div>
                 </article>
-              )}
-
-              {milestone && (
-                <aside className="milestone-card">
-                  <div className="milestone-icon">
-                    <Icon name="sparkles" size={18} />
-                  </div>
-                  <div>
-                    <span>Milestone summary</span>
-                    <h3>{milestone.title}</h3>
-                    <p>{milestone.summary}</p>
-                  </div>
-                </aside>
               )}
 
               {!pending && quickReplies.length > 0 && (
@@ -803,7 +940,9 @@ export function StudyShell() {
                 <span className="eyebrow">Learning universe</span>
                 <h2>
                   {focusNode?.domain ?? "Knowledge"}{" "}
-                  <span>/ {focusNode?.label}</span>
+                  <span>
+                    / {focusNode?.label ?? "Awaiting first concept"}
+                  </span>
                 </h2>
               </div>
               <div className="universe-stats">
@@ -841,12 +980,26 @@ export function StudyShell() {
               onSelect={selectConcept}
             />
 
-            <div className="universe-hint">
-              <Icon name="orbit" size={15} />
-              Drag to orbit · scroll to travel · select a star
-            </div>
+            {nodes.length ? (
+              <div className="universe-hint">
+                <Icon name="orbit" size={15} />
+                Drag to orbit · scroll to travel · select a star
+              </div>
+            ) : (
+              <div className="universe-empty">
+                <span>
+                  <Icon name="sparkles" size={19} />
+                </span>
+                <strong>Your universe begins with a question</strong>
+                <p>
+                  Start a conversation and Aster will map the concepts hiding
+                  inside it.
+                </p>
+              </div>
+            )}
 
-            <aside className="concept-card" aria-live="polite">
+            {selectedNode && (
+              <aside className="concept-card" aria-live="polite">
               <div className="concept-card-top">
                 <div>
                   <span
@@ -917,10 +1070,247 @@ export function StudyShell() {
                   </button>
                 )}
               </div>
-            </aside>
+              </aside>
+            )}
           </section>
         </div>
       </section>
+
+      {settingsOpen && hydrated && (
+        <div
+          className="context-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && provider.apiKey) {
+              setSettingsOpen(false);
+            }
+          }}
+        >
+          <section
+            className="connection-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="connection-title"
+          >
+            <div className="connection-heading">
+              <div className="connection-heading-icon">
+                <Icon name="orbit" size={20} />
+              </div>
+              <div>
+                <span>{provider.apiKey ? "Model connection" : "One-time setup"}</span>
+                <h2 id="connection-title">Bring your own AI model</h2>
+                <p>
+                  Your key passes through Aster to your chosen provider only
+                  when you send a message. It is never stored on Aster’s server.
+                </p>
+              </div>
+              {provider.apiKey && (
+                <button
+                  className="sheet-close"
+                  type="button"
+                  onClick={() => setSettingsOpen(false)}
+                  aria-label="Close model settings"
+                >
+                  <Icon name="x" size={18} />
+                </button>
+              )}
+            </div>
+
+            <div className="provider-tabs" aria-label="AI provider">
+              {PROVIDERS.map((item) => (
+                <button
+                  type="button"
+                  key={item.id}
+                  className={provider.id === item.id ? "is-active" : ""}
+                  onClick={() => selectProvider(item.id)}
+                >
+                  {item.name}
+                </button>
+              ))}
+            </div>
+
+            <div className="connection-fields">
+              <label>
+                <span>Model</span>
+                <input
+                  value={provider.model}
+                  onChange={(event) =>
+                    setProvider((current) => ({
+                      ...current,
+                      model: event.target.value,
+                    }))
+                  }
+                  placeholder="Model ID"
+                />
+              </label>
+              {provider.id === "custom" && (
+                <label>
+                  <span>OpenAI-compatible base URL</span>
+                  <input
+                    value={provider.baseUrl ?? ""}
+                    onChange={(event) =>
+                      setProvider((current) => ({
+                        ...current,
+                        baseUrl: event.target.value,
+                      }))
+                    }
+                    placeholder="https://api.example.com/v1"
+                  />
+                </label>
+              )}
+              <label>
+                <span>API key</span>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={provider.apiKey}
+                  onChange={(event) =>
+                    setProvider((current) => ({
+                      ...current,
+                      apiKey: event.target.value,
+                    }))
+                  }
+                  placeholder={
+                    PROVIDERS.find((item) => item.id === provider.id)
+                      ?.keyPlaceholder
+                  }
+                  autoFocus={!provider.apiKey}
+                />
+              </label>
+              <label className="remember-key">
+                <input
+                  type="checkbox"
+                  checked={provider.remember}
+                  onChange={(event) =>
+                    setProvider((current) => ({
+                      ...current,
+                      remember: event.target.checked,
+                    }))
+                  }
+                />
+                <span>
+                  Remember on this device
+                  <small>
+                    Turn this off on a shared computer. The key will disappear
+                    when this tab closes.
+                  </small>
+                </span>
+              </label>
+            </div>
+
+            <div className="pricing-widget">
+              <div className="pricing-heading">
+                <div>
+                  <span>Flagship model snapshot</span>
+                  <h3>List price per 1M tokens</h3>
+                </div>
+                <small>Checked July 26, 2026 · billed by provider</small>
+              </div>
+              <div className="pricing-grid">
+                {PROVIDERS.filter((item) => item.id !== "custom").map(
+                  (item) => (
+                    <article
+                      key={item.id}
+                      className={provider.id === item.id ? "is-selected" : ""}
+                    >
+                      <div>
+                        <strong>{item.name}</strong>
+                        <small>{item.detail}</small>
+                      </div>
+                      <dl>
+                        <div>
+                          <dt>Input</dt>
+                          <dd>{item.inputPrice}</dd>
+                        </div>
+                        <div>
+                          <dt>Output</dt>
+                          <dd>{item.outputPrice}</dd>
+                        </div>
+                      </dl>
+                      <div className="price-actions">
+                        <button
+                          type="button"
+                          onClick={() => selectProvider(item.id)}
+                        >
+                          Use model
+                        </button>
+                        <a
+                          href={item.pricingUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Official pricing
+                        </a>
+                      </div>
+                    </article>
+                  ),
+                )}
+              </div>
+            </div>
+
+            <div className="connection-footer">
+              <div>
+                {provider.apiKey && (
+                  <button
+                    className="forget-key"
+                    type="button"
+                    onClick={forgetProvider}
+                  >
+                    Forget connection
+                  </button>
+                )}
+              </div>
+              <button
+                className="connect-button"
+                type="button"
+                onClick={saveProvider}
+                disabled={
+                  !provider.apiKey.trim() ||
+                  !provider.model.trim() ||
+                  (provider.id === "custom" && !provider.baseUrl?.trim())
+                }
+              >
+                <Icon name="check" size={16} />
+                Save &amp; start studying
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {resetOpen && (
+        <div
+          className="context-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setResetOpen(false);
+          }}
+        >
+          <section
+            className="reset-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reset-title"
+          >
+            <span className="reset-icon">
+              <Icon name="rotate" size={21} />
+            </span>
+            <h2 id="reset-title">Start with a blank slate?</h2>
+            <p>
+              This clears the conversation, assignment, and every concept in
+              your learning universe. Your model connection stays ready.
+            </p>
+            <div>
+              <button type="button" onClick={() => setResetOpen(false)}>
+                Keep learning
+              </button>
+              <button type="button" onClick={resetLearning}>
+                Reset everything
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {contextOpen && (
         <div

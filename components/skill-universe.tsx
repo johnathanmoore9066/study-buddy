@@ -57,9 +57,19 @@ export function SkillUniverse({
 
     const width = Math.max(mount.clientWidth, 320);
     const height = Math.max(mount.clientHeight, 420);
+    const spaceScale = Math.min(
+      2.05,
+      1.42 + Math.sqrt(Math.max(nodes.length, 1)) * 0.07,
+    );
+    const scenePosition = (position: [number, number, number]) =>
+      new THREE.Vector3(
+        position[0] * spaceScale,
+        position[1] * spaceScale,
+        position[2] * spaceScale,
+      );
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(48, width / height, 0.1, 200);
-    camera.position.set(2.5, 4.8, 22);
+    camera.position.set(3.5, 6.2, 28);
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -86,18 +96,19 @@ export function SkillUniverse({
     controls.enableDamping = true;
     controls.dampingFactor = 0.055;
     controls.enablePan = true;
-    controls.minDistance = 6;
-    controls.maxDistance = 38;
+    controls.minDistance = 2.6;
+    controls.maxDistance = 72;
+    controls.zoomSpeed = 1.65;
     controls.autoRotate =
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     controls.autoRotateSpeed = 0.18;
 
     const selectedNode = nodes.find((node) => node.id === selectedId);
     if (selectedNode) {
-      const selectedPosition = new THREE.Vector3(...selectedNode.position);
+      const selectedPosition = scenePosition(selectedNode.position);
       controls.target.copy(selectedPosition);
       camera.position.copy(
-        selectedPosition.clone().add(new THREE.Vector3(5.5, 4.2, 16)),
+        selectedPosition.clone().add(new THREE.Vector3(7.2, 5.8, 24)),
       );
     }
 
@@ -146,16 +157,18 @@ export function SkillUniverse({
     const activeDomains = Array.from(new Set(nodes.map((node) => node.domain)));
     activeDomains.forEach((domain, domainIndex) => {
       const center = DOMAIN_CENTERS[domain] ?? DOMAIN_CENTERS.General;
+      const scaledCenter = scenePosition(center);
       const nebulaPositions: number[] = [];
       const domainRandom = seededRandomFactory(700 + domainIndex * 911);
 
       for (let index = 0; index < 95; index += 1) {
-        const radius = Math.pow(domainRandom(), 0.65) * 4.4;
+        const radius =
+          Math.pow(domainRandom(), 0.65) * 4.4 * spaceScale * 0.78;
         const angle = domainRandom() * Math.PI * 2;
         nebulaPositions.push(
-          center[0] + Math.cos(angle) * radius,
-          center[1] + (domainRandom() - 0.5) * 2.6,
-          center[2] + Math.sin(angle) * radius * 0.62,
+          scaledCenter.x + Math.cos(angle) * radius,
+          scaledCenter.y + (domainRandom() - 0.5) * 2.6 * spaceScale,
+          scaledCenter.z + Math.sin(angle) * radius * 0.62,
         );
       }
 
@@ -196,8 +209,8 @@ export function SkillUniverse({
       const to = nodeById.get(edge.to);
       if (!from || !to) return;
       const geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(...from.position),
-        new THREE.Vector3(...to.position),
+        scenePosition(from.position),
+        scenePosition(to.position),
       ]);
       const isActive = edge.from === selectedId || edge.to === selectedId;
       scene.add(
@@ -224,7 +237,7 @@ export function SkillUniverse({
         DOMAIN_COLORS[node.domain] ?? DOMAIN_COLORS.General,
       );
       const group = new THREE.Group();
-      group.position.set(...node.position);
+      group.position.copy(scenePosition(node.position));
       group.userData.id = node.id;
 
       const isSelected = node.id === selectedId;

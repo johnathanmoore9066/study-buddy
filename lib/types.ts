@@ -33,6 +33,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   timestamp?: string;
+  milestone?: LearningMilestone | null;
 }
 
 export interface ConceptUpdate {
@@ -54,14 +55,31 @@ export interface RelatedConceptUpdate {
   status: "suggested" | "locked";
 }
 
+export interface LearningMilestone {
+  title: string;
+  summary: string;
+  masteredConcepts: string[];
+}
+
 export interface TutorResponse {
   reply: string;
   focus: ConceptUpdate;
   related: RelatedConceptUpdate[];
   quickReplies: string[];
-  milestone: null | {
-    title: string;
-    summary: string;
-    masteredConcepts: string[];
-  };
+  milestone: LearningMilestone | null;
+}
+
+export type ProviderId =
+  | "deepseek"
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "custom";
+
+export interface ProviderConfig {
+  id: ProviderId;
+  model: string;
+  apiKey: string;
+  baseUrl?: string;
+  remember: boolean;
 }
