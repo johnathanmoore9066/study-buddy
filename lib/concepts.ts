@@ -1,4 +1,8 @@
-import type { ConceptEdge, ConceptNode } from "@/lib/types";
+import type {
+  ConceptEdge,
+  ConceptNode,
+  ConceptStatus,
+} from "@/lib/types";
 
 export const DOMAIN_COLORS: Record<string, string> = {
   Mathematics: "#f5a66d",
@@ -7,6 +11,13 @@ export const DOMAIN_COLORS: Record<string, string> = {
   "Computer Science": "#78d7b5",
   Statistics: "#ef8eb9",
   General: "#d5d8e6",
+};
+
+export const STATUS_COLORS: Record<ConceptStatus, string> = {
+  learning: "#f5a66d",
+  mastered: "#78d7b5",
+  suggested: "#9eb9dc",
+  locked: "#697080",
 };
 
 export const DOMAIN_CENTERS: Record<string, [number, number, number]> = {

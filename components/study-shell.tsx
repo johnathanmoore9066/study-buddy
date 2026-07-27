@@ -13,7 +13,7 @@ import {
   useState,
 } from "react";
 import {
-  DOMAIN_COLORS,
+  STATUS_COLORS,
   STARTER_EDGES,
   STARTER_NODES,
   positionForConcept,
@@ -1080,16 +1080,40 @@ export function StudyShell() {
 
             <div className="universe-legend" aria-label="Concept status legend">
               <span className="legend-learning">
-                <i /> In focus
+                <i
+                  style={{
+                    background: STATUS_COLORS.learning,
+                    color: STATUS_COLORS.learning,
+                  }}
+                />{" "}
+                In focus
               </span>
               <span className="legend-mastered">
-                <i /> Mastered
+                <i
+                  style={{
+                    background: STATUS_COLORS.mastered,
+                    color: STATUS_COLORS.mastered,
+                  }}
+                />{" "}
+                Mastered
               </span>
               <span className="legend-suggested">
-                <i /> Within reach
+                <i
+                  style={{
+                    background: STATUS_COLORS.suggested,
+                    color: STATUS_COLORS.suggested,
+                  }}
+                />{" "}
+                Within reach
               </span>
               <span className="legend-locked">
-                <i /> Further out
+                <i
+                  style={{
+                    background: STATUS_COLORS.locked,
+                    color: STATUS_COLORS.locked,
+                  }}
+                />{" "}
+                Further out
               </span>
             </div>
 
@@ -1127,9 +1151,8 @@ export function StudyShell() {
                   >
                     <i
                       style={{
-                        background:
-                          DOMAIN_COLORS[selectedNode.domain] ??
-                          DOMAIN_COLORS.General,
+                        background: STATUS_COLORS[selectedNode.status],
+                        color: STATUS_COLORS[selectedNode.status],
                       }}
                     />
                     {statusLabel(selectedNode.status)}

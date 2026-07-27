@@ -7,7 +7,11 @@ import {
   CSS2DObject,
   CSS2DRenderer,
 } from "three/addons/renderers/CSS2DRenderer.js";
-import { DOMAIN_CENTERS, DOMAIN_COLORS } from "@/lib/concepts";
+import {
+  DOMAIN_CENTERS,
+  DOMAIN_COLORS,
+  STATUS_COLORS,
+} from "@/lib/concepts";
 import type { ConceptEdge, ConceptNode } from "@/lib/types";
 
 interface SkillUniverseProps {
@@ -233,9 +237,7 @@ export function SkillUniverse({
     }> = [];
 
     nodes.forEach((node, index) => {
-      const color = new THREE.Color(
-        DOMAIN_COLORS[node.domain] ?? DOMAIN_COLORS.General,
-      );
+      const color = new THREE.Color(STATUS_COLORS[node.status]);
       const group = new THREE.Group();
       group.position.copy(scenePosition(node.position));
       group.userData.id = node.id;

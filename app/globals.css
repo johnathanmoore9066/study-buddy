@@ -1220,18 +1220,15 @@ button:disabled {
 }
 
 .universe-legend .legend-learning i {
-  background: var(--warm);
-  box-shadow: 0 0 8px var(--warm);
+  box-shadow: 0 0 8px currentColor;
 }
 
 .universe-legend .legend-mastered i {
-  border: 1px solid var(--warm-bright);
-  background: transparent;
-  box-shadow: 0 0 5px rgba(245, 166, 109, 0.45);
+  box-shadow: 0 0 6px currentColor;
 }
 
 .universe-legend .legend-suggested i {
-  background: #aaaebe;
+  box-shadow: 0 0 4px currentColor;
 }
 
 .universe-legend .legend-locked i {
