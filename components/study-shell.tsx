@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import ReactMarkdown from "react-markdown";
 import {
   FormEvent,
   Fragment,
@@ -896,7 +897,27 @@ export function StudyShell() {
                         </span>
                         {message.timestamp && <time>{message.timestamp}</time>}
                       </div>
-                      <div className="message-content">{message.content}</div>
+                      <div className="message-content">
+                        {message.role === "assistant" ? (
+                          <ReactMarkdown
+                            components={{
+                              a: ({ href, children }) => (
+                                <a
+                                  href={href}
+                                  target="_blank"
+                                  rel="noopener noreferrer nofollow"
+                                >
+                                  {children}
+                                </a>
+                              ),
+                            }}
+                          >
+                            {message.content}
+                          </ReactMarkdown>
+                        ) : (
+                          message.content
+                        )}
+                      </div>
                     </div>
                   </article>
 
