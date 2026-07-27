@@ -20,6 +20,7 @@ export interface ConceptNode {
   status: ConceptStatus;
   mastery: number;
   position: [number, number, number];
+  insights?: LearningMilestone[];
 }
 
 export interface ConceptEdge {

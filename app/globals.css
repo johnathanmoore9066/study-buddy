@@ -360,6 +360,7 @@ button:disabled {
 
 .context-button,
 .new-session-button,
+.reset-button,
 .depth-control {
   display: inline-flex;
   height: 36px;
@@ -377,12 +378,14 @@ button:disabled {
 }
 
 .context-button,
-.new-session-button {
+.new-session-button,
+.reset-button {
   padding: 0 12px;
 }
 
 .context-button:hover,
 .new-session-button:hover,
+.reset-button:hover,
 .depth-control:hover {
   border-color: var(--line-strong);
   color: var(--ink);
@@ -438,6 +441,14 @@ button:disabled {
   border-color: rgba(255, 211, 174, 0.55);
   color: #1b110b;
   background: linear-gradient(140deg, #ffd0a7, #f2a267);
+}
+
+.reset-button {
+  color: #8b91a0;
+}
+
+.reset-button svg {
+  color: #b88873;
 }
 
 .mobile-switcher {
@@ -2030,11 +2041,13 @@ button:disabled {
     font-size: 17px;
   }
 
-  .new-session-button span {
+  .new-session-button span,
+  .reset-button span {
     display: none;
   }
 
-  .new-session-button {
+  .new-session-button,
+  .reset-button {
     width: 36px;
     justify-content: center;
     padding: 0;
@@ -2122,6 +2135,10 @@ button:disabled {
   .topbar-brand h1 {
     max-width: 125px;
     font-size: 16px;
+  }
+
+  .topbar .context-button {
+    display: none;
   }
 
   .depth-control {

@@ -84,6 +84,12 @@ const STARTER_QUICK_REPLIES = [
   "I’m still stuck on 0/0.",
 ];
 
+const FRESH_SESSION_REPLIES = [
+  "I have a homework problem.",
+  "Teach me a concept from scratch.",
+  "Help me prepare for an exam.",
+];
+
 function newId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${prefix}-${crypto.randomUUID()}`;
@@ -256,6 +262,11 @@ export function StudyShell() {
     [nodes, selectedId],
   );
 
+  const sessionIsFresh = useMemo(
+    () => !messages.some((message) => message.role === "user"),
+    [messages],
+  );
+
   const selectedNode = useMemo(
     () =>
       nodes.find((node) => node.id === selectedId) ??
@@ -294,6 +305,7 @@ export function StudyShell() {
 
   const mergeTutorState = useCallback((response: TutorResponse) => {
     const focus = response.focus;
+    const milestone = response.milestone;
 
     setNodes((previous) => {
       let next = previous.map((node) => {
@@ -375,6 +387,24 @@ export function StudyShell() {
         );
       }
 
+      if (milestone) {
+        next = next.map((node) =>
+          node.id === focus.id
+            ? {
+                ...node,
+                insights: [
+                  ...(node.insights ?? []).filter(
+                    (insight) =>
+                      insight.title !== milestone.title ||
+                      insight.summary !== milestone.summary,
+                  ),
+                  milestone,
+                ].slice(-8),
+              }
+            : node,
+        );
+      }
+
       return [...next];
     });
 
@@ -407,7 +437,7 @@ export function StudyShell() {
           body: JSON.stringify({
             messages: conversation,
             depth,
-            currentConcept: focusNode?.label ?? "",
+            currentConcept: sessionIsFresh ? "" : (focusNode?.label ?? ""),
             assignmentContext,
             graphSummary,
             provider,
@@ -449,6 +479,7 @@ export function StudyShell() {
       graphSummary,
       mergeTutorState,
       provider,
+      sessionIsFresh,
     ],
   );
 
@@ -508,6 +539,48 @@ export function StudyShell() {
     setContextOpen(false);
   };
 
+  const startNewSession = () => {
+    const welcome: ChatMessage = {
+      id: newId("assistant"),
+      role: "assistant",
+      content:
+        "New trail, same universe. What are we exploring next? Start anywhere—if it connects to something you already know, we’ll let that bridge reveal itself naturally.",
+      timestamp: timeLabel(),
+    };
+    const preservedNodes = nodes.map((node) =>
+      node.status === "learning"
+        ? {
+            ...node,
+            status:
+              node.mastery >= 75
+                ? ("mastered" as const)
+                : ("suggested" as const),
+          }
+        : node,
+    );
+
+    setMessages([welcome]);
+    setNodes(preservedNodes);
+    setQuickReplies(FRESH_SESSION_REPLIES);
+    setAssignmentContext("");
+    setContextDraft("");
+    setInput("");
+    setError("");
+    setMobilePane("chat");
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        messages: [welcome],
+        nodes: preservedNodes,
+        edges,
+        selectedId,
+        depth,
+        assignmentContext: "",
+        quickReplies: FRESH_SESSION_REPLIES,
+      }),
+    );
+  };
+
   const resetLearning = () => {
     const welcome: ChatMessage = {
       id: newId("assistant"),
@@ -520,11 +593,7 @@ export function StudyShell() {
     setNodes([]);
     setEdges([]);
     setSelectedId("");
-    const blankSlateReplies = [
-      "I have a homework problem.",
-      "Teach me a concept from scratch.",
-      "Help me prepare for an exam.",
-    ];
+    const blankSlateReplies = FRESH_SESSION_REPLIES;
     setQuickReplies(blankSlateReplies);
     setAssignmentContext("");
     setContextDraft("");
@@ -643,6 +712,15 @@ export function StudyShell() {
           <button
             className="rail-button rail-new"
             type="button"
+            onClick={startNewSession}
+            aria-label="Start a new session"
+          >
+            <Icon name="plus" />
+            <span className="rail-tooltip">New session · keep your universe</span>
+          </button>
+          <button
+            className="rail-button"
+            type="button"
             onClick={() => setResetOpen(true)}
             aria-label="Reset learning"
           >
@@ -664,7 +742,9 @@ export function StudyShell() {
             </span>
             <div>
               <p>Current learning trail</p>
-              <h1>{focusNode?.label ?? "New session"}</h1>
+              <h1>
+                {sessionIsFresh ? "New session" : (focusNode?.label ?? "New session")}
+              </h1>
             </div>
           </div>
 
@@ -717,11 +797,20 @@ export function StudyShell() {
             <button
               className="new-session-button"
               type="button"
+              onClick={startNewSession}
+              aria-label="Start a new session and keep the learning universe"
+            >
+              <Icon name="plus" size={16} />
+              <span>New session</span>
+            </button>
+            <button
+              className="reset-button"
+              type="button"
               onClick={() => setResetOpen(true)}
-              aria-label="Reset learning"
+              aria-label="Reset learning and clear the universe"
             >
               <Icon name="rotate" size={16} />
-              <span>Reset</span>
+              <span>Clear sky</span>
             </button>
           </div>
         </header>
@@ -755,22 +844,32 @@ export function StudyShell() {
             <div className="conversation-meta">
               <div>
                 <span className="eyebrow">Working concept</span>
-                <h2>{focusNode?.label ?? "Waiting for your topic"}</h2>
+                <h2>
+                  {sessionIsFresh
+                    ? "Waiting for your topic"
+                    : (focusNode?.label ?? "Waiting for your topic")}
+                </h2>
               </div>
               <div className="understanding-readout">
-                <span>{focusNode?.mastery ?? 0}%</span>
+                <span>{sessionIsFresh ? 0 : (focusNode?.mastery ?? 0)}%</span>
                 <small>evidence</small>
               </div>
             </div>
             <div
               className="learning-progress"
               role="progressbar"
-              aria-label={`Understanding evidence for ${focusNode?.label ?? "new topic"}`}
+              aria-label={`Understanding evidence for ${
+                sessionIsFresh ? "new topic" : (focusNode?.label ?? "new topic")
+              }`}
               aria-valuemin={0}
               aria-valuemax={100}
-              aria-valuenow={focusNode?.mastery ?? 0}
+              aria-valuenow={sessionIsFresh ? 0 : (focusNode?.mastery ?? 0)}
             >
-              <span style={{ width: `${focusNode?.mastery ?? 0}%` }} />
+              <span
+                style={{
+                  width: `${sessionIsFresh ? 0 : (focusNode?.mastery ?? 0)}%`,
+                }}
+              />
             </div>
 
             <div className="message-thread" ref={threadRef}>

@@ -47,6 +47,10 @@ LEARNING MAP
 - The active concept is the smallest concept explaining the current bottleneck.
 - Suggest at most three concepts: prerequisites, the next reachable idea, or a
   genuinely adjacent application. Do not create decorative or redundant nodes.
+- When a fresh topic genuinely overlaps with a concept already named in the
+  known learning map, return that existing concept as a related item using its
+  existing ID. This is how separate learning trails form bridges. Never force a
+  connection merely because two subjects share vocabulary.
 - Mark a milestone only when the learner reveals a genuine change in their mental
   model: they explain a distinction, causal link, or transfer that was previously
   missing. A correct answer or completed calculation alone is not a milestone.

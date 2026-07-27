@@ -15,6 +15,8 @@ A Socratic study companion with an explorable, evidence-based learning universe.
   "aha" summaries titled in the learner's own words
 - Local conversation, learning-map, and model-setting persistence
 - A full blank-slate reset that preserves the model connection
+- Non-destructive new sessions that clear the active conversation while keeping
+  the learning universe and its insight history
 - A flagship-model pricing snapshot with links to each provider's live pricing
 - Responsive chat/universe views for desktop and mobile
 
