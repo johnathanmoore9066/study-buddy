@@ -3,22 +3,23 @@ import type { SVGProps } from "react";
 type IconName =
   | "arrow-up"
   | "book-open"
-  | "brain"
   | "check"
   | "chevron-down"
   | "clock"
   | "compass"
-  | "file-plus"
+  | "crosshair"
   | "galaxy"
   | "lock"
   | "map"
   | "message"
+  | "moon"
   | "more"
-  | "orbit"
   | "paperclip"
+  | "planet"
   | "plus"
   | "rotate"
   | "sparkles"
+  | "star"
   | "x";
 
 interface IconProps extends SVGProps<SVGSVGElement> {
@@ -45,13 +46,6 @@ export function Icon({
         <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7Z" />
       </>
     ),
-    brain: (
-      <>
-        <path d="M9.5 4.5A3 3 0 0 0 4 6a3 3 0 0 0 .2 5.9A3.2 3.2 0 0 0 7 17.5a3 3 0 0 0 5 2.2V5.8a3 3 0 0 0-2.5-1.3Z" />
-        <path d="M14.5 4.5A3 3 0 0 1 20 6a3 3 0 0 1-.2 5.9 3.2 3.2 0 0 1-2.8 5.6 3 3 0 0 1-5 2.2V5.8a3 3 0 0 1 2.5-1.3Z" />
-        <path d="M8 9a3 3 0 0 0 4 2.8M16 9a3 3 0 0 1-4 2.8M7 17.5a3 3 0 0 1 1-2.3m9 2.3a3 3 0 0 0-1-2.3" />
-      </>
-    ),
     check: <path d="m5 12 4 4L19 6" />,
     "chevron-down": <path d="m6 9 6 6 6-6" />,
     clock: (
@@ -66,10 +60,10 @@ export function Icon({
         <path d="m16 8-2.4 5.6L8 16l2.4-5.6Z" />
       </>
     ),
-    "file-plus": (
+    crosshair: (
       <>
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
-        <path d="M14 2v6h6M12 18v-6m-3 3h6" />
+        <circle cx="12" cy="12" r="6.5" />
+        <path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4" />
       </>
     ),
     galaxy: (
@@ -97,6 +91,7 @@ export function Icon({
         <path d="M8 9h8M8 13h5" />
       </>
     ),
+    moon: <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />,
     more: (
       <>
         <circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" />
@@ -104,14 +99,13 @@ export function Icon({
         <circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" />
       </>
     ),
-    orbit: (
+    paperclip: <path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 0 1 5.7 5.7l-9.6 9.6a2 2 0 0 1-2.8-2.8l8.9-8.9" />,
+    planet: (
       <>
-        <circle cx="12" cy="12" r="2" />
-        <path d="M20.2 5.8c1.4 1.4-.9 6-5.2 10.2S6.2 22.6 4.8 21.2 5.7 15.2 10 11s8.8-6.6 10.2-5.2Z" />
-        <path d="M4.8 5.8C3.4 7.2 5.7 11.8 10 16s8.8 6.6 10.2 5.2-.9-6-5.2-10.2S6.2 4.4 4.8 5.8Z" />
+        <circle cx="12" cy="12" r="5.5" fill="currentColor" stroke="none" />
+        <ellipse cx="12" cy="12" rx="10.5" ry="3.6" transform="rotate(-18 12 12)" />
       </>
     ),
-    paperclip: <path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 0 1 5.7 5.7l-9.6 9.6a2 2 0 0 1-2.8-2.8l8.9-8.9" />,
     plus: <path d="M12 5v14M5 12h14" />,
     rotate: (
       <>
@@ -124,6 +118,13 @@ export function Icon({
         <path d="m12 3-1.2 3.3L7.5 7.5l3.3 1.2L12 12l1.2-3.3 3.3-1.2-3.3-1.2Z" />
         <path d="m5 14-.8 2.2L2 17l2.2.8L5 20l.8-2.2L8 17l-2.2-.8Zm13-1-.8 2.2L15 16l2.2.8L18 19l.8-2.2L21 16l-2.2-.8Z" />
       </>
+    ),
+    star: (
+      <path
+        d="M12 2.5 13.7 10.3 21.5 12l-7.8 1.7L12 21.5l-1.7-7.8L2.5 12l7.8-1.7Z"
+        fill="currentColor"
+        stroke="none"
+      />
     ),
     x: (
       <>
@@ -147,6 +148,22 @@ export function Icon({
       {...props}
     >
       {paths[name]}
+    </svg>
+  );
+}
+
+/** Eight-point star: the long rays mark the cardinal points, as on a star chart. */
+export function AsterMark({ size = 22 }: { size?: number }) {
+  const ray = "M16 1.5 18 14l12.5 2L18 18l-2 12.5L14 18 1.5 16 14 14Z";
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <path d={ray} fill="currentColor" />
+      <path
+        d={ray}
+        fill="currentColor"
+        opacity="0.5"
+        transform="translate(16 16) rotate(45) scale(0.56) translate(-16 -16)"
+      />
     </svg>
   );
 }

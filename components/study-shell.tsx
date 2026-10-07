@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import ReactMarkdown from "react-markdown";
 import {
+  CSSProperties,
   FormEvent,
   Fragment,
   KeyboardEvent,
@@ -12,34 +13,47 @@ import {
   useRef,
   useState,
 } from "react";
+import type { CosmosPick } from "@/components/universe-engine";
 import {
   STATUS_COLORS,
   STARTER_EDGES,
   STARTER_NODES,
-  positionForConcept,
+  statusLabel,
 } from "@/lib/concepts";
+import { buildCosmos } from "@/lib/cosmos";
+import {
+  MASTERED_AT,
+  nextMastery,
+  resolveConceptId,
+  resolveDomain,
+  settleConcept,
+  struggleStreak,
+  summarizeMap,
+} from "@/lib/learning";
 import { PROVIDERS, providerName } from "@/lib/providers";
 import { DEPTH_LABELS } from "@/lib/system-prompt";
 import type {
   ChatMessage,
   ConceptEdge,
   ConceptNode,
+  ConceptStatus,
   DepthLevel,
   ProviderConfig,
   ProviderId,
   TutorResponse,
 } from "@/lib/types";
-import { Icon } from "@/components/icons";
+import { AsterMark, Icon } from "@/components/icons";
 
 const SkillUniverse = dynamic(
   () => import("@/components/skill-universe").then((module) => module.SkillUniverse),
   {
     ssr: false,
     loading: () => (
-      <div className="universe-loading" aria-label="Loading concept universe">
-        <span />
-        <span />
-        <span />
+      <div className="universe-loading" role="status">
+        <span className="orbit-spinner" aria-hidden="true">
+          <i />
+        </span>
+        Charting the sky
       </div>
     ),
   },
@@ -55,6 +69,17 @@ const DEFAULT_PROVIDER: ProviderConfig = {
   apiKey: "",
   remember: true,
 };
+
+const STATUS_ORDER: ConceptStatus[] = ["learning", "mastered", "suggested", "locked"];
+
+// One source of truth for status colours: the WebGL scene reads STATUS_COLORS
+// directly and the stylesheet reads these custom properties.
+const STATUS_TOKENS = {
+  "--status-learning": STATUS_COLORS.learning,
+  "--status-mastered": STATUS_COLORS.mastered,
+  "--status-suggested": STATUS_COLORS.suggested,
+  "--status-locked": STATUS_COLORS.locked,
+} as CSSProperties;
 
 const STARTER_MESSAGES: ChatMessage[] = [
   {
@@ -74,22 +99,28 @@ const STARTER_MESSAGES: ChatMessage[] = [
     id: "demo-3",
     role: "assistant",
     content:
-      "Yes—the factorization is right, and it exposes why substitution looked broken. For every x near 2 except x = 2, the shared (x − 2) can be removed. After that cancellation, what value does the remaining expression approach?",
+      "Yes, the factorization is right, and it exposes why substitution looked broken. For every x near 2 except x = 2, the shared (x − 2) can be removed. After that cancellation, what value does the remaining expression approach?",
     timestamp: "10:43",
   },
 ];
 
+// Replies ending in an ellipsis are sentence starters: they go into the
+// composer for the learner to finish rather than being sent as they are.
 const STARTER_QUICK_REPLIES = [
-  "It becomes x + 2, so it approaches 4.",
+  "After cancelling, it becomes…",
   "Why are we allowed to cancel it?",
   "I’m still stuck on 0/0.",
 ];
 
 const FRESH_SESSION_REPLIES = [
-  "I have a homework problem.",
-  "Teach me a concept from scratch.",
-  "Help me prepare for an exam.",
+  "Here’s my homework problem:…",
+  "I want to learn about…",
+  "Help me prepare for an exam on…",
 ];
+
+function isSentenceStarter(reply: string) {
+  return /(…|\.\.\.)$/.test(reply);
+}
 
 function newId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -105,11 +136,64 @@ function timeLabel() {
   }).format(new Date());
 }
 
-function statusLabel(status: ConceptNode["status"]) {
-  if (status === "learning") return "In focus";
-  if (status === "mastered") return "Mastered";
-  if (status === "suggested") return "Within reach";
-  return "Further out";
+function isNode(node: ConceptNode | undefined): node is ConceptNode {
+  return Boolean(node);
+}
+
+function EvidenceGauge({ value, label }: { value: number; label: string }) {
+  const radius = 23;
+  const circumference = 2 * Math.PI * radius;
+  return (
+    <div
+      className="evidence-gauge"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={value}
+    >
+      <svg viewBox="0 0 60 60" aria-hidden="true">
+        <circle className="evidence-gauge__track" cx="30" cy="30" r={radius} />
+        <circle
+          className="evidence-gauge__arc"
+          cx="30"
+          cy="30"
+          r={radius}
+          transform="rotate(-90 30 30)"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - value / 100)}
+        />
+        <g
+          className="evidence-gauge__body"
+          style={{ transform: `rotate(${value * 3.6}deg)` }}
+        >
+          <circle cx="30" cy={30 - radius} r="3.4" />
+        </g>
+      </svg>
+      <strong>{value}%</strong>
+      <small>evidence</small>
+    </div>
+  );
+}
+
+function BodyChip({
+  node,
+  onSelect,
+}: {
+  node: ConceptNode;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="body-chip"
+      data-status={node.status}
+      onClick={() => onSelect(node.id)}
+    >
+      <i aria-hidden="true" />
+      {node.label}
+    </button>
+  );
 }
 
 export function StudyShell() {
@@ -117,6 +201,7 @@ export function StudyShell() {
   const [nodes, setNodes] = useState<ConceptNode[]>(STARTER_NODES);
   const [edges, setEdges] = useState<ConceptEdge[]>(STARTER_EDGES);
   const [selectedId, setSelectedId] = useState("factoring");
+  const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [depth, setDepth] = useState<DepthLevel>(3);
   const [input, setInput] = useState("");
   const [quickReplies, setQuickReplies] = useState(STARTER_QUICK_REPLIES);
@@ -130,6 +215,7 @@ export function StudyShell() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [mobilePane, setMobilePane] = useState<"chat" | "universe">("chat");
+  const [dossierOpen, setDossierOpen] = useState(true);
   const [hydrated, setHydrated] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -280,152 +366,176 @@ export function StudyShell() {
     [nodes],
   );
 
-  const prerequisites = useMemo(
-    () =>
-      selectedNode
-        ? edges
-        .filter((edge) => edge.to === selectedNode.id)
-        .map((edge) => nodes.find((node) => node.id === edge.from))
-        .filter((node): node is ConceptNode => Boolean(node))
-            .slice(0, 3)
-        : [],
-    [edges, nodes, selectedNode],
-  );
+  const cosmos = useMemo(() => buildCosmos(nodes, edges), [edges, nodes]);
 
-  const graphSummary = useMemo(
-    () =>
-      nodes
-        .filter((node) => node.status !== "locked")
-        .map(
-          (node) =>
-            `${node.label} (${node.status}, ${node.mastery}% evidence)`,
-        )
-        .join("; "),
+  const nodeById = useMemo(
+    () => new Map(nodes.map((node) => [node.id, node])),
     [nodes],
   );
 
-  const mergeTutorState = useCallback((response: TutorResponse) => {
-    const focus = response.focus;
-    const milestone = response.milestone;
+  const systemByKey = useMemo(
+    () => new Map(cosmos.systems.map((system) => [system.key, system])),
+    [cosmos],
+  );
 
-    setNodes((previous) => {
-      let next = previous.map((node) => {
-        if (node.id === focus.id) {
-          return {
-            ...node,
-            label: focus.label,
-            domain: focus.domain,
-            description: focus.description,
-            status: "learning" as const,
-            mastery: focus.mastery,
-          };
-        }
-        if (node.status === "learning") {
-          return {
-            ...node,
-            status:
-              node.mastery >= 75
-                ? ("mastered" as const)
-                : ("suggested" as const),
-          };
-        }
-        return node;
-      });
+  const selection = useMemo<CosmosPick | null>(() => {
+    if (selectedSystem && systemByKey.has(selectedSystem)) {
+      return { kind: "system", key: selectedSystem };
+    }
+    return selectedNode ? { kind: "body", id: selectedNode.id } : null;
+  }, [selectedNode, selectedSystem, systemByKey]);
 
-      if (!next.some((node) => node.id === focus.id)) {
-        next = [
-          ...next,
-          {
-            id: focus.id,
-            label: focus.label,
-            domain: focus.domain,
-            description: focus.description,
-            status: "learning",
-            mastery: focus.mastery,
-            position: positionForConcept(focus.id, focus.domain),
-          },
-        ];
-      }
+  const selectedBody = selectedNode
+    ? cosmos.bodies.get(selectedNode.id)
+    : undefined;
+  const viewedSystem =
+    selection?.kind === "system"
+      ? systemByKey.get(selection.key)
+      : selectedBody
+        ? systemByKey.get(selectedBody.systemKey)
+        : undefined;
+  const hostNode = selectedBody?.hostId
+    ? nodeById.get(selectedBody.hostId)
+    : undefined;
+  const moonNodes = (selectedBody?.moonIds ?? [])
+    .map((id) => nodeById.get(id))
+    .filter(isNode);
 
-      response.related.forEach((related) => {
-        const existingIndex = next.findIndex((node) => node.id === related.id);
-        if (existingIndex >= 0) {
-          const existing = next[existingIndex];
-          if (
-            existing.status !== "mastered" &&
-            existing.status !== "learning"
-          ) {
-            next[existingIndex] = {
-              ...existing,
-              label: related.label,
-              domain: related.domain,
-              description: related.description,
-              status: related.status,
+  const connections = useMemo(
+    () =>
+      selectedNode
+        ? edges
+            .filter(
+              (edge) =>
+                edge.to === selectedNode.id && edge.from !== selectedBody?.hostId,
+            )
+            .map((edge) => nodeById.get(edge.from))
+            .filter(isNode)
+            .slice(0, 4)
+        : [],
+    [edges, nodeById, selectedBody?.hostId, selectedNode],
+  );
+
+  const describePlace = (id: string) => {
+    const body = cosmos.bodies.get(id);
+    const system = body ? systemByKey.get(body.systemKey) : undefined;
+    if (!body || !system) return "";
+    if (body.kind === "moon") {
+      const host = nodeById.get(body.hostId ?? "");
+      return `Moon of ${host?.label ?? "a planet"} · ${system.label}`;
+    }
+    return `Planet in the ${system.label} system`;
+  };
+
+  const graphSummary = useMemo(
+    () => summarizeMap(nodes, edges, sessionIsFresh ? "" : (focusNode?.id ?? "")),
+    [edges, focusNode?.id, nodes, sessionIsFresh],
+  );
+
+  const mergeTutorState = useCallback(
+    (response: TutorResponse) => {
+      const resolve = (id: string, label: string) => resolveConceptId(nodes, id, label);
+      const focusId = resolve(response.focus.id, response.focus.label);
+      const related = response.related
+        .map((item) => ({
+          ...item,
+          id: resolve(item.id, item.label),
+          domain: resolveDomain(nodes, item.domain),
+        }))
+        .filter((item) => item.id !== focusId);
+      const milestone = response.milestone;
+      const evidenced = new Set(
+        (milestone?.masteredConcepts ?? [])
+          .map((id) => resolve(id, id.replace(/-/g, " ")))
+          .filter((id) => id !== focusId),
+      );
+
+      setNodes((previous) => {
+        const existingFocus = previous.find((node) => node.id === focusId);
+        const focusMastery = nextMastery({
+          previous: existingFocus?.mastery,
+          proposed: response.focus.mastery,
+          learnerState: response.learnerState,
+          milestone: Boolean(milestone),
+        });
+        const insights = (current: ConceptNode["insights"]) =>
+          milestone
+            ? [
+                ...(current ?? []).filter(
+                  (insight) =>
+                    insight.title !== milestone.title ||
+                    insight.summary !== milestone.summary,
+                ),
+                milestone,
+              ].slice(-8)
+            : current;
+
+        // Concepts already on the map keep their label and subject, so a planet
+        // is never renamed or moved to another star system mid-conversation.
+        const next = previous.map((node): ConceptNode => {
+          if (node.id === focusId) {
+            return {
+              ...node,
+              status: "learning",
+              mastery: focusMastery,
+              evidence: response.focus.evidence || node.evidence,
+              insights: insights(node.insights),
             };
           }
-        } else {
+          return settleConcept(node, evidenced.has(node.id));
+        });
+
+        if (!existingFocus) {
           next.push({
-            id: related.id,
-            label: related.label,
-            domain: related.domain,
-            description: related.description,
-            status: related.status,
-            mastery: 0,
-            position: positionForConcept(related.id, related.domain),
+            id: focusId,
+            label: response.focus.label,
+            domain: resolveDomain(previous, response.focus.domain),
+            description: response.focus.description,
+            status: "learning",
+            mastery: focusMastery,
+            evidence: response.focus.evidence || undefined,
+            insights: insights(undefined),
           });
         }
+
+        related.forEach((item) => {
+          const index = next.findIndex((node) => node.id === item.id);
+          if (index < 0) {
+            next.push({
+              id: item.id,
+              label: item.label,
+              domain: item.domain,
+              description: item.description,
+              status: item.status,
+              mastery: 0,
+            });
+          } else if (next[index].status === "locked" && item.status === "suggested") {
+            // Readiness only moves closer; a concept never drifts back out of reach.
+            next[index] = { ...next[index], status: "suggested" };
+          }
+        });
+
+        return next;
       });
 
-      if (response.milestone?.masteredConcepts.length) {
-        next = next.map((node) =>
-          response.milestone?.masteredConcepts.includes(node.id)
-            ? {
-                ...node,
-                status: "mastered" as const,
-                mastery: Math.max(node.mastery, 80),
-              }
-            : node,
-        );
-      }
-
-      if (milestone) {
-        next = next.map((node) =>
-          node.id === focus.id
-            ? {
-                ...node,
-                insights: [
-                  ...(node.insights ?? []).filter(
-                    (insight) =>
-                      insight.title !== milestone.title ||
-                      insight.summary !== milestone.summary,
-                  ),
-                  milestone,
-                ].slice(-8),
-              }
-            : node,
-        );
-      }
-
-      return [...next];
-    });
-
-    setEdges((previous) => {
-      const next = [...previous];
-      response.related.forEach((related) => {
-        const from =
-          related.relation === "prerequisite" ? related.id : focus.id;
-        const to =
-          related.relation === "prerequisite" ? focus.id : related.id;
-        if (!next.some((edge) => edge.from === from && edge.to === to)) {
-          next.push({ from, to, relation: related.relation });
-        }
+      setEdges((previous) => {
+        const next = [...previous];
+        related.forEach((item) => {
+          const from = item.relation === "prerequisite" ? item.id : focusId;
+          const to = item.relation === "prerequisite" ? focusId : item.id;
+          if (!next.some((edge) => edge.from === from && edge.to === to)) {
+            next.push({ from, to, relation: item.relation });
+          }
+        });
+        return next;
       });
-      return next;
-    });
 
-    setSelectedId(focus.id);
-    setQuickReplies(response.quickReplies);
-  }, []);
+      setSelectedId(focusId);
+      setSelectedSystem(null);
+      setQuickReplies(response.quickReplies);
+    },
+    [nodes],
+  );
 
   const requestTutor = useCallback(
     async (conversation: ChatMessage[]) => {
@@ -438,7 +548,16 @@ export function StudyShell() {
           body: JSON.stringify({
             messages: conversation,
             depth,
-            currentConcept: sessionIsFresh ? "" : (focusNode?.label ?? ""),
+            focus:
+              sessionIsFresh || !focusNode
+                ? null
+                : {
+                    id: focusNode.id,
+                    label: focusNode.label,
+                    evidence: focusNode.mastery,
+                    insights: (focusNode.insights ?? []).map((insight) => insight.title),
+                  },
+            struggleStreak: struggleStreak(conversation),
             assignmentContext,
             graphSummary,
             provider,
@@ -460,6 +579,7 @@ export function StudyShell() {
             content: result.reply,
             timestamp: timeLabel(),
             milestone: result.milestone,
+            learnerState: result.learnerState ?? undefined,
           },
         ]);
         mergeTutorState(result);
@@ -476,7 +596,7 @@ export function StudyShell() {
     [
       assignmentContext,
       depth,
-      focusNode?.label,
+      focusNode,
       graphSummary,
       mergeTutorState,
       provider,
@@ -521,6 +641,13 @@ export function StudyShell() {
     }
   };
 
+  // Setting a textarea's value leaves the caret at the end, so focusing now is
+  // enough for the learner to keep typing where the starter stops.
+  const startReply = (starter: string) => {
+    setInput(`${starter.replace(/\s*(…|\.\.\.)$/, "")} `);
+    textAreaRef.current?.focus();
+  };
+
   const handleFile = async (file?: File) => {
     if (!file) return;
     const text = await file.text();
@@ -545,7 +672,7 @@ export function StudyShell() {
       id: newId("assistant"),
       role: "assistant",
       content:
-        "New trail, same universe. What are we exploring next? Start anywhere—if it connects to something you already know, we’ll let that bridge reveal itself naturally.",
+        "New trail, same universe. What are we exploring next? Start anywhere. If it connects to something you already know, we’ll let that bridge reveal itself naturally.",
       timestamp: timeLabel(),
     };
     const preservedNodes = nodes.map((node) =>
@@ -553,7 +680,7 @@ export function StudyShell() {
         ? {
             ...node,
             status:
-              node.mastery >= 75
+              node.mastery >= MASTERED_AT
                 ? ("mastered" as const)
                 : ("suggested" as const),
           }
@@ -567,6 +694,7 @@ export function StudyShell() {
     setContextDraft("");
     setInput("");
     setError("");
+    setSelectedSystem(null);
     setMobilePane("chat");
     localStorage.setItem(
       STORAGE_KEY,
@@ -587,13 +715,14 @@ export function StudyShell() {
       id: newId("assistant"),
       role: "assistant",
       content:
-        "Blank slate, open sky. What are we untangling today? Drop in the topic, problem, or your messiest first thought—I’ll help you find the next step without taking the thinking away from you.",
+        "Blank slate, open sky. What are we untangling today? Drop in the topic, problem, or your messiest first thought. I’ll help you find the next step without taking the thinking away from you.",
       timestamp: timeLabel(),
     };
     setMessages([welcome]);
     setNodes([]);
     setEdges([]);
     setSelectedId("");
+    setSelectedSystem(null);
     const blankSlateReplies = FRESH_SESSION_REPLIES;
     setQuickReplies(blankSlateReplies);
     setAssignmentContext("");
@@ -631,8 +760,24 @@ export function StudyShell() {
   };
 
   const selectConcept = useCallback((id: string) => {
+    setSelectedSystem(null);
     setSelectedId(id);
   }, []);
+
+  const selectSystem = useCallback((key: string) => {
+    setSelectedSystem(key);
+  }, []);
+
+  const handleCosmosSelect = useCallback(
+    (pick: CosmosPick) => {
+      if (pick.kind === "system") {
+        selectSystem(pick.key);
+      } else {
+        selectConcept(pick.id);
+      }
+    },
+    [selectConcept, selectSystem],
+  );
 
   const selectProvider = (id: ProviderId) => {
     const preset = PROVIDERS.find((item) => item.id === id);
@@ -665,591 +810,569 @@ export function StudyShell() {
     setSettingsOpen(true);
   };
 
+  const dossierToggle = (
+    <button
+      className="icon-button dossier__toggle"
+      type="button"
+      aria-expanded={dossierOpen}
+      aria-controls="dossier-details"
+      aria-label={dossierOpen ? "Hide details" : "Show details"}
+      onClick={() => setDossierOpen((open) => !open)}
+    >
+      <Icon name="chevron-down" size={16} />
+    </button>
+  );
+
+  const focusEvidence = sessionIsFresh ? 0 : (focusNode?.mastery ?? 0);
+  const focusTitle = sessionIsFresh
+    ? "Waiting for your topic"
+    : (focusNode?.label ?? "Waiting for your topic");
+  const systemPlanets = viewedSystem
+    ? [...viewedSystem.planets].sort((a, b) => a.tier - b.tier)
+    : [];
+  const systemMoonCount = systemPlanets.reduce(
+    (total, planet) => total + planet.moons.length,
+    0,
+  );
+
   return (
-    <main className="app-shell">
-      <aside className="app-rail" aria-label="Primary navigation">
+    <main className="app-shell" style={STATUS_TOKENS}>
+      <header className="masthead">
+        <div className="brand">
+          <AsterMark size={22} />
+          <span>Aster</span>
+        </div>
         <button
-          className="brand-mark"
+          className="model-chip"
           type="button"
-          aria-label="Aster home"
+          onClick={() => setSettingsOpen(true)}
+          aria-label={`Model and API settings: ${providerName(provider.id)}, ${
+            provider.model || "no model connected"
+          }`}
+        >
+          <i className={provider.apiKey ? "is-connected" : ""} />
+          <span>
+            <b>{providerName(provider.id)}</b> {provider.model || "Connect a model"}
+          </span>
+          <Icon name="chevron-down" size={14} />
+        </button>
+        <button
+          className="button button--primary masthead__new"
+          type="button"
+          onClick={startNewSession}
+          aria-label="Start a new session and keep the learning universe"
+        >
+          <Icon name="plus" size={16} />
+          <span>New session</span>
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => setResetOpen(true)}
+          aria-label="Clear sky: reset learning and clear the universe"
+          title="Clear sky"
+        >
+          <Icon name="rotate" size={17} />
+        </button>
+      </header>
+
+      <nav className="pane-switch" aria-label="Study view">
+        <button
+          type="button"
+          aria-pressed={mobilePane === "chat"}
           onClick={() => setMobilePane("chat")}
         >
-          <Icon name="sparkles" size={21} />
+          <Icon name="message" size={16} />
+          Conversation
         </button>
+        <button
+          type="button"
+          aria-pressed={mobilePane === "universe"}
+          onClick={() => setMobilePane("universe")}
+        >
+          <Icon name="galaxy" size={16} />
+          Universe
+        </button>
+      </nav>
 
-        <nav className="rail-nav">
-          <button
-            type="button"
-            className={`rail-button ${mobilePane === "chat" ? "is-active" : ""}`}
-            onClick={() => setMobilePane("chat")}
-            aria-label="Study conversation"
-          >
-            <Icon name="message" />
-            <span className="rail-tooltip">Conversation</span>
-          </button>
-          <button
-            type="button"
-            className={`rail-button ${
-              mobilePane === "universe" ? "is-active" : ""
-            }`}
-            onClick={() => setMobilePane("universe")}
-            aria-label="Learning universe"
-          >
-            <Icon name="galaxy" />
-            <span className="rail-tooltip">Learning universe</span>
-          </button>
-          <button
-            type="button"
-            className="rail-button"
-            onClick={openContext}
-            aria-label="Assignment context"
-          >
-            <Icon name="book-open" />
-            <span className="rail-tooltip">Assignment context</span>
-          </button>
-        </nav>
-
-        <div className="rail-bottom">
-          <button
-            className="rail-button rail-new"
-            type="button"
-            onClick={startNewSession}
-            aria-label="Start a new session"
-          >
-            <Icon name="plus" />
-            <span className="rail-tooltip">New session · keep your universe</span>
-          </button>
-          <button
-            className="rail-button"
-            type="button"
-            onClick={() => setResetOpen(true)}
-            aria-label="Reset learning"
-          >
-            <Icon name="rotate" />
-            <span className="rail-tooltip">Reset learning</span>
-          </button>
-          <div className="profile-orb" aria-label="Local learner profile">
-            <Icon name="brain" size={15} />
-            <i />
-          </div>
-        </div>
-      </aside>
-
-      <section className="app-main">
-        <header className="topbar">
-          <div className="topbar-brand">
-            <span className="mobile-brand-mark">
-              <Icon name="sparkles" size={17} />
-            </span>
-            <div>
-              <p>Current learning trail</p>
-              <h1>
-                {sessionIsFresh ? "New session" : (focusNode?.label ?? "New session")}
-              </h1>
-            </div>
-          </div>
-
-          <div className="topbar-actions">
-            <button
-              className="model-button"
-              type="button"
-              onClick={() => setSettingsOpen(true)}
-              aria-label="Model and API settings"
-            >
-              <i className={provider.apiKey ? "is-connected" : ""} />
-              <span>
-                <small>{providerName(provider.id)}</small>
-                {provider.model || "Connect model"}
-              </span>
-              <Icon name="chevron-down" size={14} />
-            </button>
-            <button
-              className="context-button"
-              type="button"
-              onClick={openContext}
-              aria-label={
-                assignmentContext
-                  ? "Edit assignment context"
-                  : "Add assignment context"
-              }
-            >
-              <Icon name={assignmentContext ? "check" : "file-plus"} size={16} />
-              <span>
-                {assignmentContext ? "Context added" : "Add assignment"}
-              </span>
-            </button>
-            <label className="depth-control" data-level={depth}>
-              <span>Depth</span>
-              <select
-                value={depth}
-                onChange={(event) =>
-                  setDepth(Number(event.target.value) as DepthLevel)
-                }
-                aria-label="Target depth"
-              >
-                {([1, 2, 3, 4, 5] as DepthLevel[]).map((level) => (
-                  <option value={level} key={level}>
-                    {level} · {DEPTH_LABELS[level]}
-                  </option>
-                ))}
-              </select>
-              <Icon name="chevron-down" size={14} />
-            </label>
-            <button
-              className="new-session-button"
-              type="button"
-              onClick={startNewSession}
-              aria-label="Start a new session and keep the learning universe"
-            >
-              <Icon name="plus" size={16} />
-              <span>New session</span>
-            </button>
-            <button
-              className="reset-button"
-              type="button"
-              onClick={() => setResetOpen(true)}
-              aria-label="Reset learning and clear the universe"
-            >
-              <Icon name="rotate" size={16} />
-              <span>Clear sky</span>
-            </button>
-          </div>
-        </header>
-
-        <div className="mobile-switcher" aria-label="Study view">
-          <button
-            type="button"
-            className={mobilePane === "chat" ? "is-active" : ""}
-            onClick={() => setMobilePane("chat")}
-          >
-            <Icon name="message" size={16} />
-            Study
-          </button>
-          <button
-            type="button"
-            className={mobilePane === "universe" ? "is-active" : ""}
-            onClick={() => setMobilePane("universe")}
-          >
-            <Icon name="galaxy" size={16} />
-            Universe
-          </button>
-        </div>
-
-        <div className="workspace">
-          <section
-            className={`conversation-panel ${
-              mobilePane === "chat" ? "is-mobile-active" : ""
-            }`}
-            aria-label="Study conversation"
-          >
-            <div className="conversation-meta">
-              <div>
-                <span className="eyebrow">Working concept</span>
-                <h2>
-                  {sessionIsFresh
-                    ? "Waiting for your topic"
-                    : (focusNode?.label ?? "Waiting for your topic")}
-                </h2>
-              </div>
-              <div className="understanding-readout">
-                <span>{sessionIsFresh ? 0 : (focusNode?.mastery ?? 0)}%</span>
-                <small>evidence</small>
-              </div>
-            </div>
-            <div
-              className="learning-progress"
-              role="progressbar"
-              aria-label={`Understanding evidence for ${
-                sessionIsFresh ? "new topic" : (focusNode?.label ?? "new topic")
-              }`}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={sessionIsFresh ? 0 : (focusNode?.mastery ?? 0)}
-            >
-              <span
-                style={{
-                  width: `${sessionIsFresh ? 0 : (focusNode?.mastery ?? 0)}%`,
-                }}
-              />
-            </div>
-
-            <div className="message-thread" ref={threadRef}>
-              <div className="thread-date">
-                <span />
-                <p>Today · Structural depth</p>
-                <span />
-              </div>
-
-              {messages.map((message) => (
-                <Fragment key={message.id}>
-                  <article
-                    className={`message message--${message.role}`}
-                  >
-                    {message.role === "assistant" && (
-                      <div className="assistant-avatar" aria-hidden="true">
-                        <Icon name="sparkles" size={15} />
-                      </div>
-                    )}
-                    <div className="message-body">
-                      <div className="message-author">
-                        <span>
-                          {message.role === "assistant" ? "Aster" : "You"}
-                        </span>
-                        {message.timestamp && <time>{message.timestamp}</time>}
-                      </div>
-                      <div className="message-content">
-                        {message.role === "assistant" ? (
-                          <ReactMarkdown
-                            components={{
-                              a: ({ href, children }) => (
-                                <a
-                                  href={href}
-                                  target="_blank"
-                                  rel="noopener noreferrer nofollow"
-                                >
-                                  {children}
-                                </a>
-                              ),
-                            }}
-                          >
-                            {message.content}
-                          </ReactMarkdown>
-                        ) : (
-                          message.content
-                        )}
-                      </div>
-                    </div>
-                  </article>
-
-                  {message.milestone && (
-                    <aside className="milestone-card">
-                      <div className="milestone-icon">
-                        <Icon name="sparkles" size={18} />
-                      </div>
-                      <div>
-                        <span>Insight captured in your words</span>
-                        <blockquote>{message.milestone.title}</blockquote>
-                        <p>{message.milestone.summary}</p>
-                        <small>Saved with this learning trail</small>
-                      </div>
-                    </aside>
-                  )}
-                </Fragment>
-              ))}
-
-              {pending && (
-                <article className="message message--assistant">
-                  <div className="assistant-avatar" aria-hidden="true">
-                    <Icon name="sparkles" size={15} />
-                  </div>
-                  <div className="message-body">
-                    <div className="message-author">
-                      <span>Aster</span>
-                      <time>thinking with you</time>
-                    </div>
-                    <div className="thinking-indicator" aria-label="Aster is thinking">
-                      <span />
-                      <span />
-                      <span />
-                    </div>
-                  </div>
-                </article>
-              )}
-
-              {!pending && quickReplies.length > 0 && (
-                <div className="quick-replies" aria-label="Response starters">
-                  {quickReplies.map((reply) => (
-                    <button
-                      type="button"
-                      key={reply}
-                      onClick={() => void sendMessage(reply)}
-                    >
-                      {reply}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="composer-wrap">
-              {error && (
-                <div className="composer-error" role="alert">
-                  <span>{error}</span>
-                  {messages.at(-1)?.role === "user" && (
-                    <button type="button" onClick={retryLast}>
-                      Retry
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {assignmentContext && (
-                <button
-                  className="context-chip"
-                  type="button"
-                  onClick={openContext}
-                >
-                  <Icon name="check" size={13} />
-                  Assignment context attached
-                </button>
-              )}
-
-              <form className="composer" onSubmit={handleSubmit}>
-                <textarea
-                  ref={textAreaRef}
-                  value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                  onKeyDown={handleComposerKeyDown}
-                  placeholder="Think out loud—rough reasoning is welcome…"
-                  rows={2}
-                  aria-label="Message Aster"
-                  disabled={pending}
-                />
-                <div className="composer-toolbar">
-                  <div className="composer-tools">
-                    <button
-                      type="button"
-                      className="icon-button"
-                      onClick={() => fileInputRef.current?.click()}
-                      aria-label="Attach text notes or a rubric"
-                    >
-                      <Icon name="paperclip" size={17} />
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-button"
-                      onClick={openContext}
-                      aria-label="Paste assignment context"
-                    >
-                      <Icon name="book-open" size={17} />
-                    </button>
-                    <span>Enter to send · Shift + Enter for a new line</span>
-                  </div>
-                  <button
-                    className="send-button"
-                    type="submit"
-                    disabled={!input.trim() || pending}
-                    aria-label="Send message"
-                  >
-                    <Icon name="arrow-up" size={18} />
-                  </button>
-                </div>
-              </form>
-              <input
-                ref={fileInputRef}
-                className="visually-hidden"
-                type="file"
-                accept=".txt,.md,.csv,.json,.html,.js,.ts,.tsx,.py"
-                onChange={(event) => void handleFile(event.target.files?.[0])}
-              />
-              <p className="privacy-note">
-                Aster guides the thinking; you keep authorship of the answer.
-              </p>
-            </div>
-          </section>
-
-          <section
-            className={`universe-panel ${
-              mobilePane === "universe" ? "is-mobile-active" : ""
-            }`}
-            aria-label="Learning universe"
-          >
-            <div className="universe-gradient" />
-            <div className="universe-header">
-              <div>
-                <span className="eyebrow">Learning universe</span>
-                <h2>
-                  {focusNode?.domain ?? "Knowledge"}{" "}
-                  <span>
-                    / {focusNode?.label ?? "Awaiting first concept"}
-                  </span>
-                </h2>
-              </div>
-              <div className="universe-stats">
-                <div>
-                  <strong>{masteredCount}</strong>
-                  <span>mastered</span>
-                </div>
-                <i />
-                <div>
-                  <strong>{nodes.length}</strong>
-                  <span>mapped</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="universe-legend" aria-label="Concept status legend">
-              <span className="legend-learning">
-                <i
-                  style={{
-                    background: STATUS_COLORS.learning,
-                    color: STATUS_COLORS.learning,
-                  }}
-                />{" "}
-                In focus
-              </span>
-              <span className="legend-mastered">
-                <i
-                  style={{
-                    background: STATUS_COLORS.mastered,
-                    color: STATUS_COLORS.mastered,
-                  }}
-                />{" "}
-                Mastered
-              </span>
-              <span className="legend-suggested">
-                <i
-                  style={{
-                    background: STATUS_COLORS.suggested,
-                    color: STATUS_COLORS.suggested,
-                  }}
-                />{" "}
-                Within reach
-              </span>
-              <span className="legend-locked">
-                <i
-                  style={{
-                    background: STATUS_COLORS.locked,
-                    color: STATUS_COLORS.locked,
-                  }}
-                />{" "}
-                Further out
-              </span>
-            </div>
-
-            <SkillUniverse
-              nodes={nodes}
-              edges={edges}
-              selectedId={selectedId}
-              onSelect={selectConcept}
-            />
-
-            {nodes.length ? (
-              <div className="universe-hint">
-                <Icon name="orbit" size={15} />
-                Drag to orbit · scroll to travel · select a star
-              </div>
-            ) : (
-              <div className="universe-empty">
-                <span>
-                  <Icon name="sparkles" size={19} />
-                </span>
-                <strong>Your universe begins with a question</strong>
-                <p>
-                  Start a conversation and Aster will map the concepts hiding
-                  inside it.
-                </p>
-              </div>
+      <section
+        className={`log-panel ${mobilePane === "chat" ? "is-mobile-active" : ""}`}
+        aria-label="Study conversation"
+      >
+        <div className="focus-head">
+          <div className="focus-head__text">
+            <p className="eyebrow eyebrow--signal">
+              {sessionIsFresh ? "New session" : "In focus"}
+            </p>
+            <h1>{focusTitle}</h1>
+            {!sessionIsFresh && focusNode && (
+              <p className="focus-head__place">{describePlace(focusNode.id)}</p>
             )}
+          </div>
+          <EvidenceGauge
+            value={focusEvidence}
+            label={`Understanding evidence for ${
+              sessionIsFresh ? "new topic" : (focusNode?.label ?? "new topic")
+            }`}
+          />
+        </div>
 
-            {selectedNode && (
-              <aside className="concept-card" aria-live="polite">
-              <div className="concept-card-top">
-                <div>
-                  <span
-                    className={`concept-status concept-status--${selectedNode.status}`}
-                  >
-                    <i
-                      style={{
-                        background: STATUS_COLORS[selectedNode.status],
-                        color: STATUS_COLORS[selectedNode.status],
+        <div className="thread" ref={threadRef}>
+          <p className="thread-date">Today · {DEPTH_LABELS[depth]} depth</p>
+
+          {messages.map((message) => (
+            <Fragment key={message.id}>
+              <article className={`message message--${message.role}`}>
+                <header className="message__meta">
+                  {message.role === "assistant" && (
+                    <Icon name="star" size={12} className="message__mark" />
+                  )}
+                  <strong>{message.role === "assistant" ? "Aster" : "You"}</strong>
+                  {message.timestamp && <time>{message.timestamp}</time>}
+                </header>
+                <div className="message__content">
+                  {message.role === "assistant" ? (
+                    <ReactMarkdown
+                      components={{
+                        a: ({ href, children }) => (
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noopener noreferrer nofollow"
+                          >
+                            {children}
+                          </a>
+                        ),
                       }}
-                    />
-                    {statusLabel(selectedNode.status)}
-                  </span>
-                  <h3>{selectedNode.label}</h3>
-                  <p>{selectedNode.description}</p>
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                  ) : (
+                    message.content
+                  )}
                 </div>
-                <div className="concept-mastery">
-                  <strong>{selectedNode.mastery}%</strong>
-                  <span>evidence</span>
-                </div>
-              </div>
+              </article>
 
-              <div className="concept-progress">
-                <span style={{ width: `${selectedNode.mastery}%` }} />
-              </div>
+              {message.milestone && (
+                <aside className="insight">
+                  <p className="eyebrow eyebrow--signal">
+                    <Icon name="star" size={11} />
+                    Insight logged, in your words
+                  </p>
+                  <blockquote>{message.milestone.title}</blockquote>
+                  <p>{message.milestone.summary}</p>
+                  <small>Saved with this learning trail</small>
+                </aside>
+              )}
+            </Fragment>
+          ))}
 
-              <div className="concept-card-bottom">
-                <div className="built-from">
-                  <span>Connected from</span>
-                  <div>
-                    {prerequisites.length ? (
-                      prerequisites.map((node) => (
-                        <button
-                          type="button"
-                          key={node.id}
-                          onClick={() => setSelectedId(node.id)}
-                        >
-                          {node.label}
-                        </button>
-                      ))
-                    ) : (
-                      <small>Foundational concept</small>
-                    )}
-                  </div>
-                </div>
-                {selectedNode.id === focusNode?.id ? (
-                  <button className="focus-button is-current" type="button">
-                    <Icon name="message" size={15} />
-                    In conversation
+          {pending && (
+            <article className="message message--assistant">
+              <header className="message__meta">
+                <Icon name="star" size={12} className="message__mark" />
+                <strong>Aster</strong>
+                <time>thinking with you</time>
+              </header>
+              <div className="thinking" role="status" aria-label="Aster is thinking">
+                <span className="orbit-spinner" aria-hidden="true">
+                  <i />
+                </span>
+              </div>
+            </article>
+          )}
+
+          {!pending && quickReplies.length > 0 && (
+            <div className="starters" aria-label="Response starters">
+              {quickReplies.map((reply) =>
+                isSentenceStarter(reply) ? (
+                  <button
+                    type="button"
+                    key={reply}
+                    className="is-starter"
+                    title="Finish this in the message box"
+                    onClick={() => startReply(reply)}
+                  >
+                    {reply}
                   </button>
                 ) : (
                   <button
-                    className="focus-button"
                     type="button"
-                    onClick={studySelected}
-                    disabled={pending}
+                    key={reply}
+                    onClick={() => void sendMessage(reply)}
                   >
-                    <Icon
-                      name={
-                        selectedNode.status === "locked" ? "compass" : "sparkles"
-                      }
-                      size={15}
-                    />
-                    {selectedNode.status === "locked"
-                      ? "Check readiness"
-                      : "Study this concept"}
+                    {reply}
                   </button>
-                )}
-              </div>
-              </aside>
-            )}
-          </section>
+                ),
+              )}
+            </div>
+          )}
         </div>
+
+        <div className="composer-dock">
+          {error && (
+            <div className="composer-error" role="alert">
+              <span>{error}</span>
+              {messages.at(-1)?.role === "user" && (
+                <button type="button" onClick={retryLast}>
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
+
+          {assignmentContext && (
+            <button className="context-chip" type="button" onClick={openContext}>
+              <Icon name="check" size={13} />
+              Assignment context attached
+            </button>
+          )}
+
+          <form className="composer" onSubmit={handleSubmit}>
+            <textarea
+              ref={textAreaRef}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={handleComposerKeyDown}
+              placeholder="Think out loud. Rough reasoning is welcome…"
+              rows={2}
+              aria-label="Message Aster"
+              disabled={pending}
+            />
+            <div className="composer-bar">
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => fileInputRef.current?.click()}
+                aria-label="Attach text notes or a rubric"
+                title="Attach notes or a rubric"
+              >
+                <Icon name="paperclip" size={17} />
+              </button>
+              <button
+                type="button"
+                className={`icon-button ${assignmentContext ? "is-on" : ""}`}
+                onClick={openContext}
+                aria-label={
+                  assignmentContext
+                    ? "Edit assignment context"
+                    : "Add assignment context"
+                }
+                title={assignmentContext ? "Edit assignment" : "Add assignment"}
+              >
+                <Icon name="book-open" size={17} />
+              </button>
+              <fieldset className="depth-dial">
+                <legend className="visually-hidden">Target depth</legend>
+                <span className="depth-dial__label" aria-hidden="true">
+                  Depth
+                </span>
+                <span className="depth-dial__stops">
+                  {([1, 2, 3, 4, 5] as DepthLevel[]).map((level) => (
+                    <label
+                      className="depth-dial__stop"
+                      key={level}
+                      title={`${level} · ${DEPTH_LABELS[level]}`}
+                    >
+                      <input
+                        type="radio"
+                        name="depth"
+                        value={level}
+                        checked={depth === level}
+                        onChange={() => setDepth(level)}
+                        aria-label={`${level}, ${DEPTH_LABELS[level]}`}
+                      />
+                      <span aria-hidden="true">{level}</span>
+                    </label>
+                  ))}
+                </span>
+                <span className="depth-dial__name" aria-hidden="true">
+                  {DEPTH_LABELS[depth]}
+                </span>
+              </fieldset>
+              <button
+                className="send-button"
+                type="submit"
+                disabled={!input.trim() || pending}
+                aria-label="Send message"
+              >
+                <Icon name="arrow-up" size={18} />
+              </button>
+            </div>
+          </form>
+          <input
+            ref={fileInputRef}
+            className="visually-hidden"
+            type="file"
+            accept=".txt,.md,.csv,.json,.html,.js,.ts,.tsx,.py"
+            onChange={(event) => void handleFile(event.target.files?.[0])}
+          />
+          <p className="composer-note">
+            <span className="composer-note__keys">
+              Enter to send · Shift + Enter for a new line
+            </span>
+            <span>Aster guides the thinking; you keep authorship of the answer.</span>
+          </p>
+        </div>
+      </section>
+
+      <section
+        className={`universe-panel ${
+          mobilePane === "universe" ? "is-mobile-active" : ""
+        }`}
+        aria-label="Learning universe"
+      >
+        <SkillUniverse
+          nodes={nodes}
+          edges={edges}
+          cosmos={cosmos}
+          selection={selection}
+          onSelect={handleCosmosSelect}
+        />
+
+        <div className="universe-hud" data-occludes>
+          <p className="eyebrow">Learning universe</p>
+          {selection?.kind === "body" && viewedSystem && (
+            <nav className="cosmos-path" aria-label="Location in the universe">
+              <button type="button" onClick={() => selectSystem(viewedSystem.key)}>
+                {viewedSystem.label}
+              </button>
+              {hostNode && (
+                <>
+                  <span aria-hidden="true">/</span>
+                  <button type="button" onClick={() => selectConcept(hostNode.id)}>
+                    {hostNode.label}
+                  </button>
+                </>
+              )}
+            </nav>
+          )}
+          <h2>
+            {selection?.kind === "system"
+              ? viewedSystem?.label
+              : (selectedNode?.label ?? "Uncharted sky")}
+          </h2>
+          <p className="universe-stats">
+            <b>{masteredCount}</b> mastered · <b>{nodes.length}</b> mapped ·{" "}
+            <b>{cosmos.systems.length}</b>{" "}
+            {cosmos.systems.length === 1 ? "system" : "systems"}
+          </p>
+        </div>
+
+        {nodes.length ? (
+          <div className="universe-key" role="group" aria-label="Map key" data-occludes>
+            <ul className="universe-key__bodies">
+              <li>
+                <Icon name="star" size={13} />
+                Subject
+              </li>
+              <li>
+                <Icon name="planet" size={15} />
+                Concept
+              </li>
+              <li>
+                <Icon name="moon" size={13} />
+                Sub-concept
+              </li>
+            </ul>
+            <ul className="universe-key__status">
+              {STATUS_ORDER.map((status) => (
+                <li key={status} data-status={status}>
+                  <i aria-hidden="true" />
+                  {statusLabel(status)}
+                </li>
+              ))}
+            </ul>
+            <p className="universe-key__hint">
+              Drag to orbit · scroll or pinch to zoom · select any body
+            </p>
+          </div>
+        ) : (
+          <div className="universe-empty">
+            <Icon name="star" size={18} />
+            <strong>Your universe begins with a question</strong>
+            <p>
+              Start a conversation and Aster will chart the concepts hiding
+              inside it.
+            </p>
+          </div>
+        )}
+
+        {selection?.kind === "system" && viewedSystem ? (
+          <aside
+            className={`dossier ${dossierOpen ? "" : "is-collapsed"}`}
+            aria-live="polite"
+            aria-label="Selected star system"
+            data-occludes
+          >
+            <div className="dossier__top">
+              <span className="status-tag status-tag--system">
+                <Icon name="star" size={12} />
+                Star system
+              </span>
+              <span className="dossier__evidence">
+                <b>{viewedSystem.mastered}</b> of {viewedSystem.total} mastered
+              </span>
+              {dossierToggle}
+            </div>
+            <h3>{viewedSystem.label}</h3>
+            <div className="dossier__details" id="dossier-details" hidden={!dossierOpen}>
+              <p className="dossier__place">
+                {systemPlanets.length}{" "}
+                {systemPlanets.length === 1 ? "planet" : "planets"} ·{" "}
+                {systemMoonCount} {systemMoonCount === 1 ? "moon" : "moons"}
+              </p>
+              <div className="evidence-rule" aria-hidden="true">
+                <span
+                  style={{
+                    width: `${
+                      viewedSystem.total
+                        ? (viewedSystem.mastered / viewedSystem.total) * 100
+                        : 0
+                    }%`,
+                  }}
+                />
+              </div>
+              <dl className="dossier__facts">
+                <div>
+                  <dt>Planets</dt>
+                  <dd>
+                    {systemPlanets
+                      .map((planet) => nodeById.get(planet.id))
+                      .filter(isNode)
+                      .map((node) => (
+                        <BodyChip key={node.id} node={node} onSelect={selectConcept} />
+                      ))}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </aside>
+        ) : (
+          selectedNode && (
+            <aside
+              className={`dossier ${dossierOpen ? "" : "is-collapsed"}`}
+              aria-live="polite"
+              aria-label="Selected concept"
+              data-occludes
+            >
+              <div className="dossier__top">
+                <span className="status-tag" data-status={selectedNode.status}>
+                  <i aria-hidden="true" />
+                  {statusLabel(selectedNode.status)}
+                </span>
+                <span className="dossier__evidence">
+                  <b>{selectedNode.mastery}%</b> evidence
+                </span>
+                {dossierToggle}
+              </div>
+              <h3>{selectedNode.label}</h3>
+              <div className="dossier__details" id="dossier-details" hidden={!dossierOpen}>
+                <p className="dossier__place">{describePlace(selectedNode.id)}</p>
+                <p className="dossier__description">{selectedNode.description}</p>
+                <div className="evidence-rule" aria-hidden="true">
+                  <span style={{ width: `${selectedNode.mastery}%` }} />
+                </div>
+                {selectedNode.evidence && (
+                  <p className="dossier__note">
+                    <span>Latest evidence</span>
+                    {selectedNode.evidence}
+                  </p>
+                )}
+                <dl className="dossier__facts">
+                  {hostNode && (
+                    <div>
+                      <dt>Orbits</dt>
+                      <dd>
+                        <BodyChip node={hostNode} onSelect={selectConcept} />
+                      </dd>
+                    </div>
+                  )}
+                  {moonNodes.length > 0 && (
+                    <div>
+                      <dt>Moons</dt>
+                      <dd>
+                        {moonNodes.map((node) => (
+                          <BodyChip key={node.id} node={node} onSelect={selectConcept} />
+                        ))}
+                      </dd>
+                    </div>
+                  )}
+                  <div>
+                    <dt>Connected from</dt>
+                    <dd>
+                      {connections.length ? (
+                        connections.map((node) => (
+                          <BodyChip key={node.id} node={node} onSelect={selectConcept} />
+                        ))
+                      ) : (
+                        <span className="dossier__none">Foundational concept</span>
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+                <div className="dossier__actions">
+                  {selectedNode.id === focusNode?.id && !sessionIsFresh ? (
+                    <span className="dossier__current">
+                      <Icon name="message" size={15} />
+                      In conversation
+                    </span>
+                  ) : (
+                    <button
+                      className="button button--primary"
+                      type="button"
+                      onClick={studySelected}
+                      disabled={pending}
+                    >
+                      <Icon
+                        name={selectedNode.status === "locked" ? "compass" : "sparkles"}
+                        size={15}
+                      />
+                      {selectedNode.status === "locked"
+                        ? "Check readiness"
+                        : "Study this concept"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </aside>
+          )
+        )}
       </section>
 
       {settingsOpen && hydrated && (
         <div
-          className="context-backdrop"
+          className="sheet-backdrop"
           role="presentation"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget && provider.apiKey) {
               setSettingsOpen(false);
             }
           }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && provider.apiKey) setSettingsOpen(false);
+          }}
         >
           <section
-            className="connection-sheet"
+            className="sheet sheet--wide"
             role="dialog"
             aria-modal="true"
             aria-labelledby="connection-title"
           >
-            <div className="connection-heading">
-              <div className="connection-heading-icon">
-                <Icon name="orbit" size={20} />
-              </div>
+            <header className="sheet__head">
               <div>
-                <span>{provider.apiKey ? "Model connection" : "One-time setup"}</span>
+                <p className="eyebrow eyebrow--signal">
+                  {provider.apiKey ? "Model connection" : "One-time setup"}
+                </p>
                 <h2 id="connection-title">Bring your own AI model</h2>
-                <p>
+                <p className="sheet__intro">
                   Your key passes through Aster to your chosen provider only
                   when you send a message. It is never stored on Aster’s server.
                 </p>
               </div>
               {provider.apiKey && (
                 <button
-                  className="sheet-close"
+                  className="icon-button"
                   type="button"
                   onClick={() => setSettingsOpen(false)}
                   aria-label="Close model settings"
@@ -1257,14 +1380,14 @@ export function StudyShell() {
                   <Icon name="x" size={18} />
                 </button>
               )}
-            </div>
+            </header>
 
-            <div className="provider-tabs" aria-label="AI provider">
+            <div className="segmented" role="group" aria-label="AI provider">
               {PROVIDERS.map((item) => (
                 <button
                   type="button"
                   key={item.id}
-                  className={provider.id === item.id ? "is-active" : ""}
+                  aria-pressed={provider.id === item.id}
                   onClick={() => selectProvider(item.id)}
                 >
                   {item.name}
@@ -1272,8 +1395,8 @@ export function StudyShell() {
               ))}
             </div>
 
-            <div className="connection-fields">
-              <label>
+            <div className="field-grid">
+              <label className="field">
                 <span>Model</span>
                 <input
                   value={provider.model}
@@ -1287,7 +1410,7 @@ export function StudyShell() {
                 />
               </label>
               {provider.id === "custom" && (
-                <label>
+                <label className="field">
                   <span>OpenAI-compatible base URL</span>
                   <input
                     value={provider.baseUrl ?? ""}
@@ -1301,7 +1424,7 @@ export function StudyShell() {
                   />
                 </label>
               )}
-              <label>
+              <label className="field">
                 <span>API key</span>
                 <input
                   type="password"
@@ -1320,7 +1443,7 @@ export function StudyShell() {
                   autoFocus={!provider.apiKey}
                 />
               </label>
-              <label className="remember-key">
+              <label className="check-field">
                 <input
                   type="checkbox"
                   checked={provider.remember}
@@ -1341,61 +1464,73 @@ export function StudyShell() {
               </label>
             </div>
 
-            <div className="pricing-widget">
-              <div className="pricing-heading">
-                <div>
-                  <span>Flagship model snapshot</span>
-                  <h3>List price per 1M tokens</h3>
-                </div>
-                <small>Checked July 26, 2026 · billed by provider</small>
+            <section className="price-sheet" aria-labelledby="pricing-title">
+              <div className="price-sheet__head">
+                <h3 id="pricing-title">Flagship list prices per 1M tokens</h3>
+                <p>Checked July 26, 2026 · billed by your provider</p>
               </div>
-              <div className="pricing-grid">
-                {PROVIDERS.filter((item) => item.id !== "custom").map(
-                  (item) => (
-                    <article
-                      key={item.id}
-                      className={provider.id === item.id ? "is-selected" : ""}
-                    >
-                      <div>
-                        <strong>{item.name}</strong>
-                        <small>{item.detail}</small>
-                      </div>
-                      <dl>
-                        <div>
-                          <dt>Input</dt>
-                          <dd>{item.inputPrice}</dd>
-                        </div>
-                        <div>
-                          <dt>Output</dt>
-                          <dd>{item.outputPrice}</dd>
-                        </div>
-                      </dl>
-                      <div className="price-actions">
-                        <button
-                          type="button"
-                          onClick={() => selectProvider(item.id)}
+              <div className="price-table-wrap">
+                <table className="price-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Provider</th>
+                      <th scope="col" className="num">
+                        Input
+                      </th>
+                      <th scope="col" className="num">
+                        Output
+                      </th>
+                      <th scope="col">
+                        <span className="visually-hidden">Actions</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {PROVIDERS.filter((item) => item.id !== "custom").map(
+                      (item) => (
+                        <tr
+                          key={item.id}
+                          className={provider.id === item.id ? "is-selected" : ""}
                         >
-                          Use model
-                        </button>
-                        <a
-                          href={item.pricingUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Official pricing
-                        </a>
-                      </div>
-                    </article>
-                  ),
-                )}
+                          <th scope="row">
+                            <strong>{item.name}</strong>
+                            <small>{item.detail}</small>
+                          </th>
+                          <td className="num">{item.inputPrice}</td>
+                          <td className="num">{item.outputPrice}</td>
+                          <td className="price-table__actions">
+                            <button
+                              type="button"
+                              onClick={() => selectProvider(item.id)}
+                              disabled={provider.id === item.id}
+                            >
+                              {provider.id === item.id ? "Selected" : "Use model"}
+                            </button>
+                            <a
+                              href={item.pricingUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Official pricing
+                              <span className="visually-hidden">
+                                {" "}
+                                for {item.name}, opens in a new tab
+                              </span>
+                            </a>
+                          </td>
+                        </tr>
+                      ),
+                    )}
+                  </tbody>
+                </table>
               </div>
-            </div>
+            </section>
 
-            <div className="connection-footer">
+            <footer className="sheet__foot">
               <div>
                 {provider.apiKey && (
                   <button
-                    className="forget-key"
+                    className="text-button text-button--danger"
                     type="button"
                     onClick={forgetProvider}
                   >
@@ -1404,7 +1539,7 @@ export function StudyShell() {
                 )}
               </div>
               <button
-                className="connect-button"
+                className="button button--primary"
                 type="button"
                 onClick={saveProvider}
                 disabled={
@@ -1416,38 +1551,48 @@ export function StudyShell() {
                 <Icon name="check" size={16} />
                 Save &amp; start studying
               </button>
-            </div>
+            </footer>
           </section>
         </div>
       )}
 
       {resetOpen && (
         <div
-          className="context-backdrop"
+          className="sheet-backdrop"
           role="presentation"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setResetOpen(false);
           }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setResetOpen(false);
+          }}
         >
           <section
-            className="reset-sheet"
+            className="sheet sheet--narrow"
             role="dialog"
             aria-modal="true"
             aria-labelledby="reset-title"
           >
-            <span className="reset-icon">
-              <Icon name="rotate" size={21} />
-            </span>
+            <p className="eyebrow eyebrow--danger">Clear sky</p>
             <h2 id="reset-title">Start with a blank slate?</h2>
-            <p>
+            <p className="sheet__intro">
               This clears the conversation, assignment, and every concept in
               your learning universe. Your model connection stays ready.
             </p>
-            <div>
-              <button type="button" onClick={() => setResetOpen(false)}>
+            <div className="sheet__actions">
+              <button
+                className="button button--ghost"
+                type="button"
+                onClick={() => setResetOpen(false)}
+                autoFocus
+              >
                 Keep learning
               </button>
-              <button type="button" onClick={resetLearning}>
+              <button
+                className="button button--danger"
+                type="button"
+                onClick={resetLearning}
+              >
                 Reset everything
               </button>
             </div>
@@ -1457,51 +1602,56 @@ export function StudyShell() {
 
       {contextOpen && (
         <div
-          className="context-backdrop"
+          className="sheet-backdrop"
           role="presentation"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setContextOpen(false);
           }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setContextOpen(false);
+          }}
         >
           <section
-            className="context-sheet"
+            className="sheet"
             role="dialog"
             aria-modal="true"
             aria-labelledby="context-title"
           >
-            <div className="context-sheet-header">
-              <div className="context-sheet-icon">
-                <Icon name="book-open" size={19} />
-              </div>
+            <header className="sheet__head">
               <div>
-                <span>Optional session context</span>
+                <p className="eyebrow eyebrow--signal">Optional session context</p>
                 <h2 id="context-title">Add the assignment or rubric</h2>
+                <p className="sheet__intro">
+                  Paste the relevant prompt, grading criteria, or notes. Aster
+                  uses them to stay aligned without forcing an upload.
+                </p>
               </div>
               <button
+                className="icon-button"
                 type="button"
                 onClick={() => setContextOpen(false)}
                 aria-label="Close"
               >
                 <Icon name="x" size={18} />
               </button>
-            </div>
-            <p className="context-intro">
-              Paste the relevant prompt, grading criteria, or notes. Aster uses
-              them to stay aligned without forcing an upload.
-            </p>
+            </header>
             <textarea
+              className="context-input"
               value={contextDraft}
               onChange={(event) => setContextDraft(event.target.value)}
               placeholder="Paste assignment context here…"
+              aria-label="Assignment context"
               rows={12}
               autoFocus
             />
-            <div className="context-sheet-footer">
-              <span>{contextDraft.length.toLocaleString()} characters</span>
-              <div>
+            <footer className="sheet__foot">
+              <span className="sheet__count">
+                {contextDraft.length.toLocaleString()} characters
+              </span>
+              <div className="sheet__actions">
                 {assignmentContext && (
                   <button
-                    className="clear-context"
+                    className="text-button text-button--danger"
                     type="button"
                     onClick={() => {
                       setContextDraft("");
@@ -1512,21 +1662,21 @@ export function StudyShell() {
                   </button>
                 )}
                 <button
-                  className="cancel-context"
+                  className="button button--ghost"
                   type="button"
                   onClick={() => setContextOpen(false)}
                 >
                   Cancel
                 </button>
                 <button
-                  className="save-context"
+                  className="button button--primary"
                   type="button"
                   onClick={saveContext}
                 >
                   Save context
                 </button>
               </div>
-            </div>
+            </footer>
           </section>
         </div>
       )}

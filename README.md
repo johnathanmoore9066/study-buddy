@@ -8,8 +8,9 @@ A Socratic study companion with an explorable, evidence-based learning universe.
   OpenAI-compatible HTTPS providers
 - Five adjustable learning-depth levels
 - Assignment/rubric context through paste or text-file attachment
-- A navigable, widely spaced Three.js concept universe with prerequisite and
-  adjacent-field links and a broad travel range
+- A Three.js universe where each subject is a star system: concepts orbit the
+  star as planets, sub-concepts circle their planet as moons, and links between
+  subjects run as lanes between stars. Selecting any body flies the camera to it.
 - Structured learning-state updates after every tutor turn
 - Evidence-based mastery, reachable suggestions, locked concepts, and persistent
   "aha" summaries titled in the learner's own words
@@ -41,6 +42,9 @@ keys or model environment variables are required.
 
 The model returns one structured tutor turn containing:
 
+- a private assessment, written before the reply: its own working for the
+  learner's latest attempt, the learner's state (correct, partial, slip,
+  misconception, stuck, question, or new topic), and the teaching move it chose;
 - the learner-facing Socratic response;
 - the smallest current bottleneck concept;
 - mastery evidence for that concept;
@@ -50,3 +54,9 @@ The model returns one structured tutor turn containing:
 The UI owns the visual presentation and persistent graph. This avoids asking the
 model to draw a brittle markdown tree, makes mastery updates inspectable, and lets
 new concept nodes appear naturally as the learner changes subjects.
+
+The app treats the model's mastery number as a proposal. `lib/learning.ts` caps
+how far it can move in one turn based on the assessed learner state (it cannot
+rise at all on a stuck or question turn), matches concepts the model renames to
+existing ones, and counts consecutive struggling turns so the tutor knows when
+to step in with more direct help.

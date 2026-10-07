@@ -6,6 +6,16 @@ export type ConceptStatus =
   | "suggested"
   | "locked";
 
+// The tutor's read of the learner's latest message, made before it replies.
+export type LearnerState =
+  | "correct"
+  | "partial"
+  | "slip"
+  | "misconception"
+  | "stuck"
+  | "question"
+  | "new-topic";
+
 export type ConceptRelation =
   | "prerequisite"
   | "builds-to"
@@ -19,7 +29,7 @@ export interface ConceptNode {
   description: string;
   status: ConceptStatus;
   mastery: number;
-  position: [number, number, number];
+  evidence?: string;
   insights?: LearningMilestone[];
 }
 
@@ -35,6 +45,7 @@ export interface ChatMessage {
   content: string;
   timestamp?: string;
   milestone?: LearningMilestone | null;
+  learnerState?: LearnerState;
 }
 
 export interface ConceptUpdate {
@@ -63,6 +74,7 @@ export interface LearningMilestone {
 }
 
 export interface TutorResponse {
+  learnerState: LearnerState | null;
   reply: string;
   focus: ConceptUpdate;
   related: RelatedConceptUpdate[];

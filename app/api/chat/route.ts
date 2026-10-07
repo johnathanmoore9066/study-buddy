@@ -2,12 +2,14 @@ import { NextResponse } from "next/server";
 import {
   SOCRATIC_SYSTEM_PROMPT,
   buildSessionContext,
+  type SessionFocus,
 } from "@/lib/system-prompt";
 import type {
   ChatMessage,
   ConceptRelation,
   ConceptStatus,
   DepthLevel,
+  LearnerState,
   ProviderConfig,
   ProviderId,
   TutorResponse,
@@ -29,12 +31,40 @@ const VALID_RELATIONS = new Set<ConceptRelation>([
   "adjacent",
 ]);
 const VALID_RELATED_STATUSES = new Set<ConceptStatus>(["suggested", "locked"]);
+const LEARNER_STATES: LearnerState[] = [
+  "correct",
+  "partial",
+  "slip",
+  "misconception",
+  "stuck",
+  "question",
+  "new-topic",
+];
 
+// assessment comes first so the model checks the learner's work and picks a
+// teaching move before it writes the reply.
 const TUTOR_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["reply", "focus", "related", "quickReplies", "milestone"],
+  required: ["assessment", "reply", "focus", "related", "quickReplies", "milestone"],
   properties: {
+    assessment: {
+      type: "object",
+      additionalProperties: false,
+      required: ["learnerState", "check", "move"],
+      properties: {
+        learnerState: { type: "string", enum: LEARNER_STATES },
+        check: {
+          type: "string",
+          description:
+            "Your own working for the learner's latest claim or attempt, done before judging it, or n/a.",
+        },
+        move: {
+          type: "string",
+          description: "The one teaching move for this turn and why, in one sentence.",
+        },
+      },
+    },
     reply: {
       type: "string",
       description: "Learner-facing tutoring response ending in exactly one question.",
@@ -155,9 +185,16 @@ function asMastery(value: unknown) {
 }
 
 function parseJson(content: string) {
-  return JSON.parse(
-    content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""),
-  ) as unknown;
+  const cleaned = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    return JSON.parse(cleaned) as unknown;
+  } catch (error) {
+    // Some models wrap the object in a sentence; fall back to the outermost braces.
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start < 0 || end <= start) throw error;
+    return JSON.parse(cleaned.slice(start, end + 1)) as unknown;
+  }
 }
 
 function shortenVerbatim(value: string, maxWords = 14) {
@@ -226,8 +263,14 @@ function normalizeTutorResponse(
     parsed.milestone && typeof parsed.milestone === "object"
       ? (parsed.milestone as Record<string, unknown>)
       : null;
+  const assessment =
+    parsed.assessment && typeof parsed.assessment === "object"
+      ? (parsed.assessment as Record<string, unknown>)
+      : {};
+  const learnerState = asString(assessment.learnerState) as LearnerState;
 
   return {
+    learnerState: LEARNER_STATES.includes(learnerState) ? learnerState : null,
     reply: asString(
       parsed.reply,
       "Let’s isolate the part that feels least certain. What is the first step you trust?",
@@ -394,7 +437,16 @@ async function callAnthropic(
     body: JSON.stringify({
       model: provider.model,
       max_tokens: 1800,
-      system: `${SOCRATIC_SYSTEM_PROMPT}\n\n${sessionContext}`,
+      // The tool definition and fixed instructions are identical every turn, so
+      // cache them; only the session context after the breakpoint varies.
+      system: [
+        {
+          type: "text",
+          text: SOCRATIC_SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+        { type: "text", text: sessionContext },
+      ],
       messages,
       tools: [
         {
@@ -467,7 +519,8 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       messages?: ChatMessage[];
       depth?: number;
-      currentConcept?: string;
+      focus?: Partial<SessionFocus> | null;
+      struggleStreak?: number;
       assignmentContext?: string;
       graphSummary?: string;
       provider?: ProviderConfig;
@@ -511,9 +564,24 @@ export async function POST(request: Request) {
     const depth = ([1, 2, 3, 4, 5].includes(Number(body.depth))
       ? Number(body.depth)
       : 3) as DepthLevel;
+    const focusLabel = asString(body.focus?.label).slice(0, 120);
+    const focus: SessionFocus | null = focusLabel
+      ? {
+          id: safeId(body.focus?.id, "focus"),
+          label: focusLabel,
+          evidence: asMastery(body.focus?.evidence),
+          insights: Array.isArray(body.focus?.insights)
+            ? body.focus.insights
+                .map((insight) => asString(insight).slice(0, 160))
+                .filter(Boolean)
+                .slice(-3)
+            : [],
+        }
+      : null;
     const sessionContext = buildSessionContext({
       depth,
-      currentConcept: asString(body.currentConcept),
+      focus,
+      struggleStreak: Math.min(Math.max(Math.floor(Number(body.struggleStreak) || 0), 0), 10),
       assignmentContext: asString(body.assignmentContext).slice(0, 36_000),
       graphSummary: asString(body.graphSummary).slice(0, 12_000),
     });
@@ -533,7 +601,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "The tutor response could not be read. Your message is still here—try sending it again.",
+          "The tutor response could not be read. Your message is still here, so try sending it again.",
       },
       { status: 500 },
     );

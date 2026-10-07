@@ -4,15 +4,6 @@ import type {
   ConceptStatus,
 } from "@/lib/types";
 
-export const DOMAIN_COLORS: Record<string, string> = {
-  Mathematics: "#f5a66d",
-  Physics: "#77c7e8",
-  Chemistry: "#b29af4",
-  "Computer Science": "#78d7b5",
-  Statistics: "#ef8eb9",
-  General: "#d5d8e6",
-};
-
 export const STATUS_COLORS: Record<ConceptStatus, string> = {
   learning: "#f5a66d",
   mastered: "#78d7b5",
@@ -20,14 +11,12 @@ export const STATUS_COLORS: Record<ConceptStatus, string> = {
   locked: "#697080",
 };
 
-export const DOMAIN_CENTERS: Record<string, [number, number, number]> = {
-  Mathematics: [-3.1, 0.2, 0],
-  Physics: [6.8, 2.7, -2.4],
-  Chemistry: [7.3, -4.5, 1.8],
-  "Computer Science": [-1.4, 7.4, -5.2],
-  Statistics: [-7.3, 5.2, 2.5],
-  General: [0, 0, 0],
-};
+export function statusLabel(status: ConceptStatus) {
+  if (status === "learning") return "In focus";
+  if (status === "mastered") return "Mastered";
+  if (status === "suggested") return "Within reach";
+  return "Further out";
+}
 
 export const STARTER_NODES: ConceptNode[] = [
   {
@@ -37,7 +26,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Number operations and their relationships.",
     status: "mastered",
     mastery: 94,
-    position: [-7.2, -1.2, 0.2],
   },
   {
     id: "fractions",
@@ -46,7 +34,14 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Parts, ratios, and equivalent representations.",
     status: "mastered",
     mastery: 86,
-    position: [-6.2, 1.4, 0.9],
+  },
+  {
+    id: "equivalent-fractions",
+    label: "Equivalent fractions",
+    domain: "Mathematics",
+    description: "Different numerators and denominators naming the same amount.",
+    status: "mastered",
+    mastery: 90,
   },
   {
     id: "ratios",
@@ -55,7 +50,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Comparing quantities multiplicatively.",
     status: "mastered",
     mastery: 82,
-    position: [-5.2, -0.3, -1.1],
   },
   {
     id: "expressions",
@@ -64,7 +58,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Combining symbols, values, and operations.",
     status: "mastered",
     mastery: 78,
-    position: [-3.9, -1.7, 0.8],
   },
   {
     id: "linear-equations",
@@ -73,7 +66,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Equality, unknowns, and reversible operations.",
     status: "mastered",
     mastery: 76,
-    position: [-3.3, 0.3, -0.2],
   },
   {
     id: "factoring",
@@ -82,7 +74,22 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Rewriting expressions to reveal their multiplicative structure.",
     status: "learning",
     mastery: 48,
-    position: [-1.1, -1, 0.7],
+  },
+  {
+    id: "common-factors",
+    label: "Greatest common factor",
+    domain: "Mathematics",
+    description: "Pulling the largest shared factor out of every term.",
+    status: "mastered",
+    mastery: 81,
+  },
+  {
+    id: "difference-of-squares",
+    label: "Difference of squares",
+    domain: "Mathematics",
+    description: "Rewriting a² − b² as (a − b)(a + b).",
+    status: "suggested",
+    mastery: 34,
   },
   {
     id: "functions",
@@ -91,7 +98,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Rules that map inputs to outputs.",
     status: "suggested",
     mastery: 18,
-    position: [0.5, 0.6, -0.5],
   },
   {
     id: "limits",
@@ -100,7 +106,14 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "What a function approaches near a point.",
     status: "suggested",
     mastery: 12,
-    position: [2.3, 1.8, 0.7],
+  },
+  {
+    id: "continuity",
+    label: "Continuity",
+    domain: "Mathematics",
+    description: "A function with no break, jump, or hole at a point.",
+    status: "locked",
+    mastery: 0,
   },
   {
     id: "derivatives",
@@ -109,7 +122,14 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Instantaneous change and local linear behavior.",
     status: "locked",
     mastery: 0,
-    position: [3.8, 0, -1.1],
+  },
+  {
+    id: "chain-rule",
+    label: "Chain rule",
+    domain: "Mathematics",
+    description: "Differentiating a function nested inside another.",
+    status: "locked",
+    mastery: 0,
   },
   {
     id: "integrals",
@@ -118,7 +138,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Accumulation, area, and inverse rates of change.",
     status: "locked",
     mastery: 0,
-    position: [4.5, -2.1, 0.7],
   },
   {
     id: "units",
@@ -127,7 +146,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Dimensional meaning and consistent measurement.",
     status: "suggested",
     mastery: 24,
-    position: [4.5, 3.1, -2.5],
   },
   {
     id: "vectors",
@@ -136,7 +154,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Quantities with magnitude and direction.",
     status: "locked",
     mastery: 0,
-    position: [6.4, 4.7, -3.5],
   },
   {
     id: "kinematics",
@@ -145,7 +162,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Describing motion through position, velocity, and acceleration.",
     status: "locked",
     mastery: 0,
-    position: [7.7, 2.5, -1.7],
   },
   {
     id: "forces",
@@ -154,7 +170,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Interactions that change motion.",
     status: "locked",
     mastery: 0,
-    position: [8.8, 4.3, -2.9],
   },
   {
     id: "energy",
@@ -163,7 +178,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "A conserved accounting system for physical change.",
     status: "locked",
     mastery: 0,
-    position: [9, 1.2, -3.7],
   },
   {
     id: "atoms",
@@ -172,7 +186,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Particles, charge, and electron organization.",
     status: "suggested",
     mastery: 8,
-    position: [5.2, -4.2, 2.2],
   },
   {
     id: "moles",
@@ -181,7 +194,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Counting particles through measurable amounts.",
     status: "locked",
     mastery: 0,
-    position: [6.4, -6.1, 1],
   },
   {
     id: "bonding",
@@ -190,7 +202,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Why atoms form stable structures.",
     status: "locked",
     mastery: 0,
-    position: [7.7, -3.2, 3.5],
   },
   {
     id: "stoichiometry",
@@ -199,7 +210,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Quantitative relationships in chemical reactions.",
     status: "locked",
     mastery: 0,
-    position: [8.7, -5.6, 2],
   },
   {
     id: "chemical-energy",
@@ -208,7 +218,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Energy transferred during chemical change.",
     status: "locked",
     mastery: 0,
-    position: [9.6, -3.7, 0.8],
   },
   {
     id: "logic",
@@ -217,7 +226,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Truth, implication, and valid inference.",
     status: "suggested",
     mastery: 14,
-    position: [-3.8, 6.3, -4.4],
   },
   {
     id: "variables",
@@ -226,7 +234,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Names for values and changing state.",
     status: "suggested",
     mastery: 10,
-    position: [-1.8, 8.2, -6.1],
   },
   {
     id: "control-flow",
@@ -235,7 +242,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Conditions, repetition, and execution paths.",
     status: "locked",
     mastery: 0,
-    position: [0.1, 6.4, -5.3],
   },
   {
     id: "algorithms",
@@ -244,7 +250,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Precise procedures for solving classes of problems.",
     status: "locked",
     mastery: 0,
-    position: [-0.3, 9.4, -4.2],
   },
   {
     id: "data-structures",
@@ -253,7 +258,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Ways to organize information around operations.",
     status: "locked",
     mastery: 0,
-    position: [1.2, 8.2, -6.8],
   },
   {
     id: "probability",
@@ -262,7 +266,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Reasoning about uncertain outcomes.",
     status: "suggested",
     mastery: 16,
-    position: [-6.1, 3.3, 2.2],
   },
   {
     id: "distributions",
@@ -271,7 +274,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Patterns describing how outcomes vary.",
     status: "locked",
     mastery: 0,
-    position: [-8, 5.4, 3.5],
   },
   {
     id: "inference",
@@ -280,7 +282,6 @@ export const STARTER_NODES: ConceptNode[] = [
     description: "Learning about populations from samples.",
     status: "locked",
     mastery: 0,
-    position: [-7, 7, 1.5],
   },
 ];
 
@@ -296,6 +297,11 @@ export const STARTER_EDGES: ConceptEdge[] = [
   { from: "functions", to: "limits", relation: "builds-to" },
   { from: "limits", to: "derivatives", relation: "builds-to" },
   { from: "derivatives", to: "integrals", relation: "builds-to" },
+  { from: "fractions", to: "equivalent-fractions", relation: "builds-to" },
+  { from: "factoring", to: "common-factors", relation: "builds-to" },
+  { from: "factoring", to: "difference-of-squares", relation: "builds-to" },
+  { from: "limits", to: "continuity", relation: "builds-to" },
+  { from: "derivatives", to: "chain-rule", relation: "builds-to" },
   { from: "ratios", to: "units", relation: "applies-in" },
   { from: "functions", to: "kinematics", relation: "applies-in" },
   { from: "derivatives", to: "kinematics", relation: "applies-in" },
@@ -318,29 +324,3 @@ export const STARTER_EDGES: ConceptEdge[] = [
   { from: "probability", to: "distributions", relation: "builds-to" },
   { from: "distributions", to: "inference", relation: "builds-to" },
 ];
-
-function hashString(value: string) {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return Math.abs(hash);
-}
-
-export function positionForConcept(
-  id: string,
-  domain: string,
-): [number, number, number] {
-  const center = DOMAIN_CENTERS[domain] ?? DOMAIN_CENTERS.General;
-  const hash = hashString(`${domain}:${id}`);
-  const angle = ((hash % 360) * Math.PI) / 180;
-  const elevation = ((((hash >> 4) % 160) - 80) / 80) * 1.8;
-  const radius = 2.1 + ((hash >> 8) % 180) / 100;
-
-  return [
-    center[0] + Math.cos(angle) * radius,
-    center[1] + elevation,
-    center[2] + Math.sin(angle) * radius,
-  ];
-}
